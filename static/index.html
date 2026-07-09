@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>皮卡丘的音乐站 · musicdl</title>
+  <title>我的音乐站 · musicdl</title>
   <meta name="referrer" content="no-referrer" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <!-- 圆润可爱字体 -->
@@ -11,1255 +11,670 @@
   <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;600&family=Nunito:wght@400;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-dark: #02030a;
-      --panel-glass: rgba(8, 10, 26, 0.26);
-      --panel-glass-soft: rgba(10, 14, 35, 0.26);
-      --accent: #f5c84c;
-      --accent-strong: #ffdd55;
-      --accent-pink: #ff7bb0;
-      --accent-blue: #4ac8ff;
-      --accent-green: #65f7c4;
-      --accent-red: #ff5c7a;
-      --text-main: #f5f6ff;
-      --text-sub: #a1a6d0;
-      --border-subtle: rgba(255, 255, 255, 0.12);
+      --bg: #eef2f9;
+      --bg-2: #e6ecf7;
+      --card: #ffffff;
+      --card-soft: #f7f9fd;
+      --border: #e2e8f3;
+      --border-strong: #cfd9ea;
+      --text-main: #212a3b;
+      --text-sub: #6b7690;
+      --text-faint: #9aa5bd;
+      --accent: #4f7cff;
+      --accent-deep: #3b64e0;
+      --accent-soft: #edf2ff;
+      --accent-pink: #ff6b9d;
+      --accent-green: #18b880;
+      --accent-red: #ef4d5e;
+      --amber: #f5a623;
+      --amber-soft: #fff5e3;
+      --shadow-sm: 0 1px 2px rgba(35,48,84,.05), 0 2px 8px rgba(35,48,84,.05);
+      --shadow-md: 0 2px 6px rgba(35,48,84,.06), 0 10px 30px rgba(35,48,84,.08);
+      --shadow-lg: 0 8px 20px rgba(35,48,84,.10), 0 24px 60px rgba(35,48,84,.14);
+      --radius: 18px;
+      --radius-sm: 12px;
     }
 
-    * {
-      box-sizing: border-box;
-      -webkit-tap-highlight-color: transparent;
-    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
     html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      background: var(--bg-dark);
+      margin: 0; padding: 0; height: 100%;
+      background: var(--bg);
       color: var(--text-main);
-      overflow: hidden; /* 页面整体不滚动 */
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    /* 背景粒子画布 */
-    #bg-canvas {
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 0;
-      pointer-events: none;
-      background:
-        radial-gradient(circle at 10% 0, #1b2340 0, transparent 55%),
-        radial-gradient(circle at 90% 100%, #211a38 0, transparent 60%),
-        #02030a;
-    }
-
-    /* 主容器：四周留白 */
-    .app {
-      position: relative;
-      z-index: 1;
-      display: flex;
-      flex-direction: column;
-      height: calc(100vh - 104px);
-      margin: 44px 80px;
-      padding: 10px 12px;
-      gap: 10px;
-      border-radius: 24px;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      background: radial-gradient(circle at 0 0, rgba(255,255,255,0.06), transparent 60%),
-                  radial-gradient(circle at 100% 100%, rgba(136,196,255,0.10), transparent 60%),
-                  rgba(0,0,0,0.45);
-      backdrop-filter: blur(14px);
-      box-shadow:
-        0 0 40px rgba(0,0,0,0.9),
-        0 0 120px rgba(136,196,255,0.35);
-    }
-    @media (max-width: 1280px) {
-      .app { margin: 32px 40px; height: calc(100vh - 70px); }
-    }
-    @media (max-width: 900px) {
-      .app { margin: 16px; height: calc(100vh - 32px); }
-    }
-
-    .ripple-target,
-    .btn,
-    .track-item,
-    .search-mini-item {
-      position: relative;
       overflow: hidden;
+      font-family: "Nunito", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+
+    /* 背景画布：浅色下淡淡的粒子 */
+    #bg-canvas {
+      position: fixed; inset: 0; width: 100%; height: 100%;
+      z-index: 0; pointer-events: none; opacity: .5;
+      background:
+        radial-gradient(circle at 12% -4%, #dbe7ff 0, transparent 50%),
+        radial-gradient(circle at 96% 104%, #ffeeda 0, transparent 48%),
+        linear-gradient(160deg, #f2f6fd 0%, #e9eff9 100%);
+    }
+
+    /* ===== 内联 SVG 图标 ===== */
+    .ic {
+      width: 1.15em; height: 1.15em;
+      fill: none; stroke: currentColor;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+      display: inline-block; vertical-align: -0.22em; flex-shrink: 0;
+    }
+
+    /* ===== 主框架 ===== */
+    .app {
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column;
+      height: 100vh;
+      max-width: 1560px; margin: 0 auto;
+      padding: 18px 26px 10px;
+      gap: 14px;
     }
 
     header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 16px;
-      border-radius: 18px;
-      background: linear-gradient(120deg, rgba(255,255,255,0.06), rgba(7,10,30,0.90));
-      border: 1px solid var(--border-subtle);
-      box-shadow: 0 10px 26px rgba(0,0,0,0.8);
-      min-height: 64px;
-      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 14px; flex-wrap: wrap;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+      padding: 10px 18px;
     }
-
-    .logo-area {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
+    .logo-area { display: flex; align-items: center; gap: 14px; min-width: 0; }
     .pikachu-box {
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
-      padding: 4px;
-      background:
-        radial-gradient(circle at 30% 0, rgba(255,255,255,0.65), rgba(255,230,140,1)),
-        radial-gradient(circle at 70% 100%, rgba(255,150,200,0.9), rgba(255,220,130,0.9));
-      box-shadow:
-        0 0 18px rgba(255,215,130,1),
-        0 14px 28px rgba(0,0,0,0.95);
-      border: 2px solid rgba(255,238,190,1);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      animation: pika-float 2.4s ease-in-out infinite;
+      width: 52px; height: 52px; border-radius: 16px; overflow: hidden;
+      background: linear-gradient(135deg, #fff3d6, #ffe6a3);
+      display: flex; align-items: center; justify-content: center;
+      border: 1px solid #ffe2a8; flex-shrink: 0;
     }
-    .pikachu-img {
-      width: 100%;
-      height: 100%;
-      border-radius: 50%;
-      object-fit: cover;
-    }
-    @keyframes pika-float {
-      0%,100% { transform: translateY(0); }
-      50%     { transform: translateY(-5px); }
-    }
-
+    .pikachu-img { width: 44px; height: 44px; object-fit: contain; }
     .title-text h1 {
-      margin: 0;
-      font-size: 18px;
-      letter-spacing: 1px;
-      text-shadow:
-        0 0 12px rgba(255,212,95,0.9),
-        0 0 26px rgba(255,176,117,0.7);
+      margin: 0; font-family: "Baloo 2", "Nunito", sans-serif;
+      font-size: 21px; font-weight: 600; letter-spacing: .5px; color: var(--text-main);
     }
-    .title-text p {
-      margin: 2px 0 0;
-      font-size: 11px;
-      color: var(--text-sub);
-    }
-
-    .header-controls {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      font-size: 11px;
-      color: var(--text-sub);
-    }
-
+    .title-text p { margin: 2px 0 0; font-size: 12px; color: var(--text-sub); }
+    .header-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .lang-toggle {
-      display: inline-flex;
-      border-radius: 999px;
-      padding: 2px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(0,0,0,0.4);
+      display: flex; background: var(--card-soft);
+      border: 1px solid var(--border); border-radius: 999px; padding: 3px;
     }
     .lang-btn {
-      border: none;
-      background: transparent;
-      padding: 3px 10px;
-      border-radius: 999px;
-      color: var(--text-sub);
-      font-size: 11px;
-      cursor: pointer;
+      border: none; background: transparent; color: var(--text-sub);
+      font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 999px;
+      cursor: pointer; font-family: inherit; transition: all .18s;
     }
-    .lang-btn.active {
-      background: radial-gradient(circle at 30% 0, rgba(255,255,255,0.28), var(--accent));
-      color: #231b08;
-      font-weight: 600;
-      box-shadow: 0 0 8px rgba(245,200,76,0.8);
-    }
-
-    .shortcut-hint {
-      max-width: 260px;
-      text-align: right;
-    }
-
+    .lang-btn.active { background: var(--accent); color: #fff; box-shadow: 0 2px 6px rgba(79,124,255,.35); }
+    .shortcut-hint { display: none; }
     .shortcut-toggle-btn {
-      border: none;
-      border-radius: 999px;
-      width: 28px; height: 28px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(0,0,0,0.4);
-      color: var(--text-sub);
-      cursor: pointer;
-      box-shadow: 0 0 10px rgba(0,0,0,0.9);
-      font-size: 15px;
+      width: 38px; height: 38px; border-radius: 12px;
+      border: 1px solid var(--border); background: var(--card-soft);
+      color: var(--text-sub); cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 15px; transition: all .18s; position: relative; overflow: hidden;
     }
+    .shortcut-toggle-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
+    .shortcut-toggle-btn .ic { width: 18px; height: 18px; }
 
-    /* 布局修正：左右也参与分配宽度，不再挤出空白 */
+    /* ===== 三栏布局 ===== */
     .layout {
-      flex: 1;
+      flex: 1; min-height: 0;
       display: grid;
-      grid-template-columns:
-        minmax(260px, 0.8fr)
-        minmax(360px, 1.58fr)
-        minmax(260px, 0.82fr);
-      gap: 10px;
-      min-height: 0;
+      grid-template-columns: 330px minmax(0, 1fr) 372px;
+      gap: 14px;
     }
 
     .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+      display: flex; flex-direction: column;
+      min-height: 0; overflow: hidden;
       position: relative;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      padding: 10px;
-      border-radius: 18px;
-      background: var(--panel-glass-soft);
-      border: 1px solid var(--border-subtle);
-      backdrop-filter: blur(18px);
-      box-shadow: 0 14px 34px rgba(0,0,0,0.85);
-      z-index: 0;
     }
-    .panel::before {
-      content: "";
-      position: absolute;
-      inset: -25%;
-      background: radial-gradient(circle at 0 0, rgba(255,255,255,0.08), transparent 60%);
-      opacity: .5;
-      pointer-events: none;
-      z-index: -1;
-    }
-
+    .panel::before { content: none; }
     .panel-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 6px;
-      position: relative;
-      z-index: 1;
-      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 14px 16px 10px; flex-wrap: wrap;
     }
     .panel-title {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 14px;
-      font-weight: 600;
+      display: flex; align-items: center; gap: 8px;
+      font-family: "Baloo 2", "Nunito", sans-serif;
+      font-size: 16px; font-weight: 600; color: var(--text-main);
     }
-    .panel-title .icon { font-size: 16px; }
+    .panel-title .icon {
+      width: 30px; height: 30px; border-radius: 10px;
+      background: var(--accent-soft); color: var(--accent);
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 14px;
+    }
     .chip {
-      font-size: 10px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: rgba(0,0,0,0.25);
-      color: var(--text-sub);
-      border: 1px solid rgba(255,255,255,0.12);
+      font-size: 11px; color: var(--text-sub);
+      background: var(--card-soft); border: 1px solid var(--border);
+      padding: 3px 10px; border-radius: 999px; white-space: nowrap;
     }
 
+    /* ===== 按钮 ===== */
     .btn {
-      border: none;
-      border-radius: 999px;
-      padding: 6px 13px;
-      background: radial-gradient(circle at 30% 0, rgba(255,255,255,0.2), var(--accent));
-      color: #231b08;
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      box-shadow: 0 7px 16px rgba(245,200,76,0.75);
-      transition: transform .12s ease, box-shadow .12s ease;
+      border: 1px solid var(--border); background: var(--card);
+      color: var(--text-main); font-family: inherit; font-weight: 700;
+      font-size: 13px; padding: 8px 16px; border-radius: var(--radius-sm);
+      cursor: pointer; transition: all .18s;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      position: relative; overflow: hidden;
     }
-    .btn-secondary {
-      background: radial-gradient(circle at 30% 0, rgba(255,255,255,0.05), rgba(80,100,180,0.95));
-      color: var(--text-main);
-      box-shadow: 0 6px 14px rgba(0,0,0,0.8);
-    }
-    .btn-ghost {
-      background: transparent;
-      border: 1px solid rgba(255,255,255,0.22);
-      color: var(--text-sub);
-      box-shadow: none;
-    }
-    .btn:active {
-      transform: translateY(1px) scale(.97);
-      box-shadow: 0 4px 10px rgba(0,0,0,0.85);
-    }
-    .btn-icon {
-      width: 28px;
-      height: 28px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      font-size: 13px;
-      border-radius: 999px;
-    }
+    .btn:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+    .btn:active { transform: translateY(0); }
+    .btn-secondary { background: var(--accent-soft); border-color: transparent; color: var(--accent-deep); }
+    .btn-secondary:hover { background: #e2eaff; border-color: transparent; color: var(--accent-deep); }
+    .btn-ghost { background: transparent; border-color: transparent; color: var(--text-sub); }
+    .btn-ghost:hover { color: var(--accent-red); background: #fff0f1; box-shadow: none; }
+    .btn-icon { width: 34px; height: 34px; padding: 0; border-radius: 11px; }
+    .btn-icon .ic { width: 16px; height: 16px; }
+    .btn-fav-active { color: var(--accent-pink) !important; background: #ffeef4 !important; border-color: transparent !important; }
+    .btn-fav-active .ic { fill: var(--accent-pink); stroke: var(--accent-pink); }
 
-    .input {
-      flex: 1;
-      padding: 7px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(5,7,20,0.8);
-      color: var(--text-main);
-      font-size: 13px;
-      outline: none;
-    }
-    .input:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px rgba(245,200,76,0.7);
-    }
-
-    /* 左侧搜索 */
-    .search-panel-content {
-      position: relative;
-      z-index: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-height: 0;
-    }
-
+    /* ===== 搜索面板 ===== */
+    .search-panel-content { display: flex; flex-direction: column; gap: 10px; padding: 0 14px 14px; flex: 1; min-height: 0; }
     .search-row {
-      display: flex;
-      align-items: center;
-      gap: 0;
-      padding: 2px 2px 2px 10px;
-      border-radius: 999px;
-      background:
-        radial-gradient(circle at 0 0, rgba(255,255,255,0.18), transparent 60%),
-        radial-gradient(circle at 100% 100%, rgba(104,174,255,0.25), transparent 60%),
-        rgba(4,6,20,0.98);
-      border: 1px solid rgba(255,255,255,0.25);
-      box-shadow: 0 10px 22px rgba(0,0,0,0.9);
+      display: flex; align-items: center; gap: 8px;
+      background: var(--card-soft); border: 1.5px solid var(--border);
+      border-radius: 14px; padding: 4px 4px 4px 12px;
+      transition: border-color .18s, box-shadow .18s; position: relative; overflow: hidden;
     }
-    .search-prefix {
-      font-size: 14px;
-      margin-right: 6px;
-      color: var(--accent-strong);
-      text-shadow: 0 0 8px rgba(245,200,76,0.9);
+    .search-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,124,255,.12); background: #fff; }
+    .search-prefix { color: var(--text-faint); display: flex; }
+    .search-prefix .ic { width: 16px; height: 16px; }
+    .input {
+      flex: 1; min-width: 0; border: none; background: transparent; outline: none;
+      font-family: inherit; font-size: 14px; color: var(--text-main); padding: 7px 0;
     }
-    .search-row .input {
-      border: none;
-      background: transparent;
-      box-shadow: none;
-      padding-left: 0;
-    }
+    .input::placeholder { color: var(--text-faint); }
     .search-row .btn {
-      margin-left: 4px;
-      border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+      color: #fff; border: none; border-radius: 11px; padding: 8px 18px;
+      box-shadow: 0 3px 10px rgba(79,124,255,.35);
     }
+    .search-row .btn:hover { color: #fff; transform: translateY(-1px); box-shadow: 0 5px 14px rgba(79,124,255,.45); }
 
-    .source-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      font-size: 11px;
-    }
+    .source-row { display: flex; flex-wrap: wrap; gap: 6px; }
     .source-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 4px 8px;
-      border-radius: 999px;
-      background: rgba(4,6,20,0.82);
-      border: 1px solid rgba(255,255,255,0.16);
-      cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 12px; font-weight: 700; color: var(--text-sub);
+      background: var(--card-soft); border: 1px solid var(--border);
+      border-radius: 999px; padding: 4px 11px; cursor: pointer;
+      transition: all .18s; position: relative; overflow: hidden;
       user-select: none;
     }
-    .source-chip input {
-      margin: 0;
-      width: 12px;
-      height: 12px;
-      accent-color: var(--accent);
-      cursor: pointer;
-    }
-    .source-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      display: inline-block;
-      box-shadow: 0 0 6px currentColor;
-    }
-    .source-dot.netease{ background:#ff6b6b; color:#ff6b6b;}
-    .source-dot.qq     { background:#4dd0e1; color:#4dd0e1;}
-    .source-dot.kuwo   { background:#ba68c8; color:#ba68c8;}
-    .source-dot.joox   { background:#65f7c4; color:#65f7c4;}
+    .source-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .source-chip:has(input:checked) { background: var(--accent-soft); border-color: rgba(79,124,255,.45); color: var(--accent-deep); }
+    .source-chip input { accent-color: var(--accent); width: 13px; height: 13px; margin: 0; cursor: pointer; }
+    .source-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    .source-dot.netease { background: #e60026; }
+    .source-dot.qq { background: #31c27c; }
+    .source-dot.kuwo { background: #ffb800; }
+    .source-dot.joox { background: #00d768; }
 
-    .limit-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      font-size: 11px;
-      color: var(--text-sub);
+    .limit-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-sub); flex-wrap: wrap; }
+    .limit-row select, .playlist-select-tools select {
+      font-family: inherit; font-size: 12.5px; color: var(--text-main);
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 9px; padding: 5px 8px; outline: none; cursor: pointer;
     }
-    .limit-row select {
-      background: rgba(5,7,24,0.8);
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.18);
-      color: var(--text-main);
-      padding: 3px 8px;
-      font-size: 11px;
-      outline: none;
-    }
+    .limit-row select:focus, .playlist-select-tools select:focus { border-color: var(--accent); }
 
-    .search-stats {
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      color: var(--text-sub);
-    }
+    .search-stats { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-sub); }
+    #search-count { background: var(--accent-soft); color: var(--accent-deep); font-weight: 800; border-radius: 999px; padding: 1px 10px; }
 
-    .search-results-mini {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      padding-right: 4px;
-      margin-top: 4px;
-    }
-
+    .search-results-mini { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
     .search-mini-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 6px 8px;
-      margin-bottom: 4px;
-      border-radius: 10px;
-      background: rgba(8,10,32,0.78);
-      border: 1px solid rgba(255,255,255,0.05);
-      font-size: 11px;
-      cursor: pointer;
-      transition: background .15s, transform .1s, box-shadow .1s;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      background: var(--card-soft); border: 1px solid transparent;
+      border-radius: 12px; padding: 8px 10px; cursor: pointer;
+      transition: all .15s; position: relative; overflow: hidden;
     }
-    .search-mini-item:hover {
-      background: rgba(26,32,80,0.9);
-      box-shadow: 0 8px 18px rgba(0,0,0,0.85);
-      transform: translateY(-1px);
-    }
-    .mini-meta-main {
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    .mini-title {
-      font-size: 11px;
+    .search-mini-item:hover { background: var(--accent-soft); border-color: rgba(79,124,255,.25); transform: translateX(2px); }
+    .mini-meta-main { min-width: 0; }
+    .mini-title { font-size: 13px; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mini-artist { font-size: 11.5px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mini-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+    .mini-badge { font-size: 10px; color: var(--text-faint); font-weight: 700; }
+    .mini-source { display: flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--text-sub); font-weight: 700; }
+    .mini-quality { font-size: 10px; color: var(--text-faint); font-weight: 700; letter-spacing: .3px; }
+    .mini-quality.q-lossless { color: var(--amber); }
+
+    /* 音质徽标（播放列表行） */
+    .q-badge {
+      font-size: 10px; font-weight: 800; letter-spacing: .3px;
+      color: var(--text-faint); background: var(--card);
+      border: 1px solid var(--border); border-radius: 6px; padding: 0 5px;
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
-    .mini-artist {
-      font-size: 10px;
-      color: var(--text-sub);
-    }
-    .mini-right {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 2px;
-    }
-    .mini-badge {
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 999px;
-      background: rgba(0,0,0,0.4);
-      border: 1px solid rgba(255,255,255,0.18);
-    }
-    .mini-source {
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      font-size: 9px;
-    }
+    .q-badge.q-lossless { color: #c07d00; background: var(--amber-soft); border-color: #ffdfa8; }
 
-    /* 中间播放器 */
-    .player-panel {
-      background:
-        radial-gradient(circle at 50% -40%, rgba(255,218,120,0.20), transparent 60%),
-        var(--panel-glass);
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-    .player-top {
-      display: flex;
-      gap: 10px;
-      position: relative;
-      z-index: 1;
-      min-height: 165px;
-      flex-shrink: 0;
-    }
-
+    /* ===== 播放器面板 ===== */
+    .player-panel { background: linear-gradient(180deg, #ffffff 0%, #fafcff 100%); }
+    .player-top { display: flex; gap: 16px; padding: 4px 16px 12px; align-items: stretch; }
     .cover-wrapper {
-      width: 130px;
-      height: 130px;
-      border-radius: 18px;
-      overflow: hidden;
-      background: radial-gradient(circle at 30% 0, #34344b,#151628);
-      box-shadow:
-        0 14px 30px rgba(0,0,0,0.9),
-        0 0 18px rgba(245,200,76,0.75);
-      flex-shrink: 0;
-      position: relative;
+      width: 168px; height: 168px; border-radius: 16px; overflow: hidden;
+      position: relative; flex-shrink: 0;
+      background: var(--card-soft); border: 1px solid var(--border);
+      box-shadow: var(--shadow-md);
     }
-    .cover-wrapper img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: none;
-    }
+    .cover-wrapper img { width: 100%; height: 100%; object-fit: cover; display: none; }
     .cover-placeholder {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      color: var(--text-sub);
-      font-size: 12px;
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 10px;
+      font-size: 11px; color: var(--text-sub); text-align: center; padding: 8px;
     }
     .cover-disc {
-      width: 70px; height: 70px;
-      border-radius: 50%;
-      border: 10px solid rgba(0,0,0,0.7);
-      background: radial-gradient(circle,#16141f 0,#000 45%,#222 70%,#000 100%);
-      position: relative;
-      animation: disc-spin 12s linear infinite;
+      width: 74px; height: 74px; border-radius: 50%;
+      background: conic-gradient(from 0deg, #dfe7f5, #c9d6ee, #dfe7f5, #c9d6ee, #dfe7f5);
+      position: relative; animation: spin 9s linear infinite;
     }
     .cover-disc::before {
-      content:"";
-      position:absolute;
-      inset:24%;
-      border-radius:50%;
-      background:radial-gradient(circle at 30% 0, var(--accent-pink), #b546b8,#5a2a7c);
+      content: ""; position: absolute; inset: 26px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--amber), #ffca62);
     }
     .cover-disc::after {
-      content:"";
-      position:absolute;
-      inset:42%;
-      border-radius:50%;
-      background:#05050a;
+      content: ""; position: absolute; inset: 33px; border-radius: 50%; background: #fff;
     }
-    @keyframes disc-spin { to { transform:rotate(360deg);} }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-    .player-main {
-      flex:1;
-      display:flex;
-      flex-direction:column;
-      gap:6px;
-    }
-    .track-title-row {
-      display:flex;
-      justify-content:space-between;
-      gap:6px;
-    }
-    .track-text { max-width:68%; }
+    .player-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; }
+    .track-title-row { display: flex; justify-content: space-between; gap: 10px; }
+    .track-text { min-width: 0; }
     .track-title {
-      font-size:18px;
-      font-weight:600;
-      max-height:48px;
-      overflow:hidden;
+      font-family: "Baloo 2", "Nunito", sans-serif;
+      font-size: 22px; font-weight: 600; color: var(--text-main);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .track-artist {
-      font-size:12px;
-      color:var(--text-sub);
-      margin-top:2px;
-    }
-    .track-tags {
-      display:flex;
-      flex-wrap:wrap;
-      gap:4px;
-      margin-top:4px;
-      font-size:10px;
-    }
+    .track-artist { font-size: 13px; color: var(--text-sub); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-tags { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
     .source-pill {
-      padding:2px 8px;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,0.18);
-      display:inline-flex;
-      align-items:center;
-      gap:4px;
-      background:rgba(0,0,0,0.35);
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 800; color: var(--text-sub);
+      background: var(--card-soft); border: 1px solid var(--border);
+      border-radius: 999px; padding: 3px 10px;
     }
-    .source-pill.source-netease{ color:#ff7b7b; background:rgba(255,107,107,0.12);}
-    .source-pill.source-qq     { color:#7ee5f0; background:rgba(77,208,225,0.12);}
-    .source-pill.source-kuwo   { color:#e2baff; background:rgba(186,104,200,0.12);}
-    .source-pill.source-joox   { color:#9dffd9; background:rgba(101,247,196,0.12);}
-
+    .source-pill.source-netease, .source-pill.source-qq, .source-pill.source-kuwo, .source-pill.source-joox { color: var(--text-sub); }
     .lossless-pill {
-      padding:2px 8px;
-      border-radius:999px;
-      border:1px solid rgba(164,255,224,0.6);
-      color:var(--accent-green);
-      background:rgba(13,82,60,0.8);
+      display: inline-flex; align-items: center;
+      font-size: 10.5px; font-weight: 800; letter-spacing: .5px;
+      color: #b06d00; background: linear-gradient(135deg, #fff3d9, #ffe9bd);
+      border: 1px solid #ffd98f; border-radius: 999px; padding: 3px 10px;
     }
-
-    .player-actions {
-      display:flex;
-      flex-direction:column;
-      align-items:flex-end;
-      gap:6px;
-      font-size:11px;
-    }
-    .player-btn-row { display:flex; gap:5px; }
+    .player-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+    .player-btn-row { display: flex; gap: 7px; }
     .status-pill {
-      padding:2px 8px;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,0.18);
-      background:rgba(0,0,0,0.35);
-      color:var(--text-sub);
-      font-size:11px;
+      font-size: 11px; font-weight: 800; color: var(--accent-deep);
+      background: var(--accent-soft); border-radius: 999px; padding: 3px 12px;
+      white-space: nowrap;
     }
 
-    .player-controls {
-      margin-top:4px;
-      display:flex;
-      flex-direction:column;
-      gap:6px;
-    }
-    .progress-row {
-      display:flex;
-      align-items:center;
-      gap:6px;
-      font-size:11px;
-    }
-    .progress-time {
-      width:42px;
-      text-align:center;
-      color:var(--text-sub);
-    }
+    .player-controls { display: flex; flex-direction: column; gap: 8px; }
+    .progress-row { display: flex; align-items: center; gap: 10px; }
+    .progress-time { font-size: 11px; color: var(--text-faint); font-weight: 700; font-variant-numeric: tabular-nums; }
     .progress-bar-wrapper {
-      flex:1;
-      height:6px;
-      border-radius:999px;
-      background:rgba(5,7,22,0.9);
-      position:relative;
-      cursor:pointer;
-      overflow:hidden;
+      flex: 1; height: 20px; display: flex; align-items: center;
+      cursor: pointer; position: relative; overflow: visible;
+    }
+    .progress-bar-wrapper::before {
+      content: ""; position: absolute; left: 0; right: 0; height: 6px;
+      border-radius: 999px; background: var(--bg-2); top: 7px;
     }
     .progress-bar {
-      position:absolute;
-      inset:0;
-      transform-origin:left center;
-      transform:scaleX(0);
-      background:linear-gradient(90deg, var(--accent-pink), var(--accent-strong), var(--accent-blue));
+      position: absolute; left: 0; right: 0; height: 6px; top: 7px;
+      border-radius: 999px; transform-origin: left center; transform: scaleX(0);
+      background: linear-gradient(90deg, var(--accent), var(--accent-pink));
     }
     .progress-handle {
-      position:absolute;
-      top:50%;
-      width:10px; height:10px;
-      border-radius:50%;
-      background:#fffbe3;
-      border:2px solid #e6a52b;
-      transform:translate(-50%,-50%);
-      box-shadow:0 0 8px rgba(255,255,255,0.8);
+      position: absolute; top: 50%; width: 14px; height: 14px;
+      transform: translate(-50%, -50%);
+      background: #fff; border: 3px solid var(--accent); border-radius: 50%;
+      box-shadow: var(--shadow-sm); pointer-events: none;
     }
-
-    .control-row {
-      display:flex;
-      justify-content:space-between;
-      align-items:center;
-      font-size:12px;
-    }
-    .control-main {
-      display:flex;
-      align-items:center;
-      gap:6px;
-    }
+    .control-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .control-main { display: flex; align-items: center; gap: 10px; }
+    .control-main .btn-icon { width: 40px; height: 40px; border-radius: 13px; }
     .control-main .play-btn {
-      width:40px;
-      height:40px;
-      font-size:18px;
+      width: 54px; height: 54px; border-radius: 18px; border: none;
+      background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+      color: #fff; box-shadow: 0 6px 18px rgba(79,124,255,.4);
     }
-    .control-secondary {
-      display:flex;
-      align-items:center;
-      gap:4px;
-      font-size:11px;
-    }
-    .volume-slider {
-      width:90px;
-      accent-color:var(--accent);
-    }
+    .control-main .play-btn:hover { color: #fff; transform: translateY(-2px); box-shadow: 0 9px 24px rgba(79,124,255,.5); }
+    .control-main .play-btn .ic { width: 22px; height: 22px; }
+    .control-secondary { display: flex; align-items: center; gap: 8px; color: var(--text-sub); }
+    .control-secondary .ic { width: 17px; height: 17px; }
+    .volume-slider { width: 110px; accent-color: var(--accent); cursor: pointer; }
 
-    /* 歌词区域 */
+    /* ===== 歌词 ===== */
     .lyrics-container {
-      flex: 1;
-      min-height: 0;
-      margin-top: 6px;
-      padding: 10px 18px 8px;
-      border-radius: 16px;
-      background:
-        radial-gradient(circle at 50% 0, rgba(255,220,150,0.26), transparent 60%),
-        radial-gradient(circle at 10% 100%, rgba(107,150,255,0.26), transparent 60%),
-        rgba(4,6,20,0.72);
-      border:1px solid rgba(255,255,255,0.16);
-      overflow-y:auto;
-      overflow-x:hidden;
-      position:relative;
-      box-shadow:0 12px 32px rgba(0,0,0,0.9);
+      flex: 1; min-height: 0; overflow-y: auto;
+      margin: 0 16px 14px; border-radius: 14px;
+      background: var(--card-soft); border: 1px solid var(--border);
+      position: relative; scroll-behavior: smooth;
     }
-    .lyrics-container::before,
-    .lyrics-container::after {
-      content:"";
-      position:absolute;
-      pointer-events:none;
-      mix-blend-mode:screen;
-    }
-    .lyrics-container::before {
-      inset:-25%;
-      background:conic-gradient(
-        from 0deg,
-        rgba(255,214,102,0.08),
-        rgba(255,214,102,0.38),
-        rgba(104,184,255,0.38),
-        rgba(186,132,255,0.40),
-        rgba(255,214,102,0.08)
-      );
-      opacity:0.46;
-      filter:blur(14px);
-      animation: lyricsGlow 16s linear infinite;
-    }
-    @keyframes lyricsGlow { to { transform:rotate(360deg);} }
-    .lyrics-container::after {
-      top:-40%;
-      left:-20%;
-      width:70%;
-      height:150%;
-      background:linear-gradient(
-        120deg,
-        rgba(255,248,170,0.0),
-        rgba(255,248,170,0.36),
-        rgba(161,233,255,0.0)
-      );
-      transform:translateX(-130%);
-      animation: lyricsSweep 7s linear infinite;
-      opacity:0.95;
-    }
-    @keyframes lyricsSweep {
-      0% { transform:translateX(-130%); }
-      50%{ transform:translateX(40%); }
-      100%{ transform:translateX(130%); }
-    }
-    .lyrics-container.alt-style::before {
-      background:conic-gradient(
-        from 0deg,
-        rgba(104,184,255,0.14),
-        rgba(186,132,255,0.40),
-        rgba(255,214,102,0.32),
-        rgba(104,184,255,0.46),
-        rgba(186,132,255,0.40)
-      );
-    }
-    .lyrics-inner {
-      position:relative;
-      z-index:1;
-      padding:2px 4px 10px;
-      text-align:center;
-      max-width:540px;
-      margin:0 auto;
-    }
-    .lyrics-title-line {
-      font-family: "Baloo 2","Nunito",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      font-size:14px;
-      color:var(--text-sub);
-      margin-bottom:8px;
-      letter-spacing:0.05em;
-    }
+    .lyrics-container::before, .lyrics-container::after { content: none; }
+    .lyrics-inner { padding: 20px 18px 60px; text-align: center; }
+    .lyrics-title-line { font-size: 12px; color: var(--text-faint); font-weight: 700; margin-bottom: 14px; }
     .lyrics-line {
-      font-family: "Baloo 2","Nunito",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      font-size:17px;
-      color:rgba(196,199,235,0.78);
-      margin:4px 0;
-      opacity:0.52;
-      transition:transform .25s ease, color .25s ease, text-shadow .25s ease, opacity .25s ease;
-      white-space:normal;
-      letter-spacing:0.04em;
+      font-size: 14.5px; color: var(--text-sub); line-height: 1.6;
+      padding: 6px 0; transition: all .25s; font-weight: 600;
     }
     .lyrics-line.active {
-      opacity:1;
-      transform:scale(1.14);
-      background:linear-gradient(120deg,#ffe6a7,#ff9bd4,#8fd5ff);
-      -webkit-background-clip:text;
-      background-clip:text;
-      color:transparent;
-      text-shadow:
-        0 0 10px rgba(255,255,255,0.7),
-        0 0 22px rgba(245,200,76,0.9),
-        0 0 30px rgba(106,207,255,1);
+      color: var(--accent-deep); font-size: 17px; font-weight: 800;
+      text-shadow: 0 1px 0 #fff;
     }
-    .lyrics-empty {
-      font-family: "Baloo 2","Nunito",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      font-size:15px;
-      color:var(--text-sub);
-      margin-top:18px;
-      letter-spacing:0.03em;
+    .lyrics-container.alt-style .lyrics-line.active {
+      background: linear-gradient(90deg, var(--accent), var(--accent-pink));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
     }
+    .lyrics-empty { font-size: 12.5px; color: var(--text-faint); padding: 30px 0; }
+    .lyrics-container::-webkit-scrollbar { width: 6px; }
+    .lyrics-container::-webkit-scrollbar-track { background: transparent; }
+    .lyrics-container::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
 
-    /* 右侧播放列表面板 */
-    .playlist-panel {
-      background:
-        radial-gradient(circle at 100% -40%, rgba(120,195,255,0.22), transparent 60%),
-        var(--panel-glass);
-      display:flex;
-      flex-direction:column;
-      min-height:0;
-      z-index:1;
-    }
-
+    /* ===== 播放列表面板 ===== */
     .playlist-tabs {
-      display:inline-flex;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,0.2);
-      padding:2px;
-      background:rgba(0,0,0,0.35);
-      font-size:11px;
+      display: flex; background: var(--card-soft);
+      border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px;
     }
     .playlist-tab {
-      padding:3px 10px;
-      border-radius:999px;
-      cursor:pointer;
-      color:var(--text-sub);
+      font-size: 12px; font-weight: 700; color: var(--text-sub);
+      padding: 5px 12px; border-radius: 999px; cursor: pointer;
+      transition: all .18s; white-space: nowrap;
     }
-    .playlist-tab.active {
-      background:radial-gradient(circle at 30% 0, rgba(255,255,255,0.15), rgba(104,174,255,0.9));
-      color:#02040a;
-      font-weight:600;
-      box-shadow:0 0 8px rgba(104,174,255,0.7);
-    }
+    .playlist-tab:hover { color: var(--accent); }
+    .playlist-tab.active { background: var(--accent); color: #fff; box-shadow: 0 2px 6px rgba(79,124,255,.35); }
 
-    /* 让 playlist-main 内部滚动，顶部条 sticky 不再消失 */
-    .playlist-main {
-      flex:1;
-      min-height:0;
-      display:flex;
-      flex-direction:column;
-      position:relative;
-      z-index:1;
-      overflow-y:auto;
-      padding-right:4px;
-    }
-
-    .playlist-bar {
-      display:flex;
-      flex-direction:column;
-      align-items:stretch;
-      font-size:11px;
-      color:var(--text-sub);
-      gap:5px;
-      flex-shrink:0;
-      padding-bottom:5px;
-      margin-bottom:4px;
-      position:sticky;
-      top:0;
-      z-index:2;
-      background:
-        linear-gradient(180deg, rgba(7,10,30,0.98), rgba(7,10,30,0.85));
-      border-bottom:1px solid rgba(255,255,255,0.08);
-    }
-    .playlist-top-row {
-      display:flex;
-      justify-content:space-between;
-      align-items:center;
-      gap:6px;
-    }
-    .playlist-info {
-      flex:1;
-      min-width:0;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow:ellipsis;
-    }
-    .playlist-select-row {
-      display:flex;
-      flex-direction:column;
-      align-items:stretch;
-      gap:5px;
-    }
-    .playlist-select-tools,
-    .playlist-file-actions {
-      display:flex;
-      align-items:center;
-      gap:6px;
-      flex-wrap:wrap;
-    }
-    .playlist-select-tools select {
-      flex:1;
-      min-width:0;
-      background:rgba(5,7,24,0.8);
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,0.2);
-      color:var(--text-main);
-      padding:3px 8px;
-      font-size:11px;
-      outline:none;
-    }
-    .playlist-file-actions .btn {
-      padding:4px 10px;
-      font-size:11px;
-    }
-
-    .playmode-row {
-      display:flex;
-      align-items:center;
-      gap:4px;
-      flex-shrink:0;
-    }
+    .playlist-main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 14px 14px; gap: 8px; overflow-y: auto; }
+    .playlist-bar { display: flex; flex-direction: column; gap: 8px; }
+    .playlist-top-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .playlist-info { font-size: 12px; color: var(--text-sub); font-weight: 700; }
+    .playmode-row { display: flex; gap: 5px; }
     .playmode-btn {
-      border:none;
-      border-radius:999px;
-      width:24px; height:24px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      font-size:12px;
-      background:rgba(0,0,0,0.35);
-      color:var(--text-sub);
-      cursor:pointer;
-      box-shadow:0 0 8px rgba(0,0,0,0.8);
+      width: 30px; height: 30px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--card);
+      color: var(--text-sub); cursor: pointer; font-size: 13px;
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: all .18s; position: relative; overflow: hidden;
     }
-    .playmode-btn.active {
-      background:radial-gradient(circle at 30% 0, rgba(255,255,255,0.18), rgba(110,190,255,0.95));
-      color:#02030a;
-      box-shadow:0 0 10px rgba(110,190,255,0.95);
-    }
+    .playmode-btn .ic { width: 14px; height: 14px; }
+    .playmode-btn:hover { color: var(--accent); border-color: var(--accent); }
+    .playmode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-    .playlist-list {
-      flex:0 0 auto;
-      position:relative;
-      z-index:1;
-    }
+    .playlist-select-row { display: flex; flex-direction: column; gap: 7px; }
+    .playlist-select-tools { display: flex; gap: 6px; align-items: center; }
+    .playlist-select-tools select { flex: 1; min-width: 0; }
+    .playlist-file-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+    .playlist-file-actions .btn { font-size: 12px; padding: 5px 10px; }
 
+    .playlist-list { display: flex; flex-direction: column; gap: 6px; }
     .track-item {
-      display:grid;
-      grid-template-columns:auto 1fr auto;
-      gap:6px;
-      align-items:center;
-      padding:6px 8px;
-      margin-bottom:4px;
-      border-radius:10px;
-      background:rgba(7,11,34,0.86);
-      border:1px solid rgba(255,255,255,0.06);
-      font-size:11px;
-      cursor:pointer;
-      transition:background .15s, transform .1s, box-shadow .1s;
+      display: flex; align-items: center; gap: 10px;
+      background: var(--card-soft); border: 1px solid transparent;
+      border-radius: 12px; padding: 8px 10px; cursor: pointer;
+      transition: all .15s; position: relative; overflow: hidden;
     }
-    .track-item:hover {
-      background:rgba(26,32,80,0.95);
-      transform:translateY(-1px);
-      box-shadow:0 8px 18px rgba(0,0,0,0.9);
-    }
-    .track-item.playing {
-      border-color:var(--accent);
-      box-shadow:0 0 14px rgba(245,200,76,0.9);
-    }
+    .track-item:hover { background: var(--accent-soft); border-color: rgba(79,124,255,.25); }
+    .track-item.playing { background: var(--accent-soft); border-color: rgba(79,124,255,.5); box-shadow: var(--shadow-sm); }
+    .track-item.playing .track-meta-title { color: var(--accent-deep); }
     .track-index {
-      width:22px;
-      text-align:right;
-      color:var(--text-sub);
+      width: 22px; text-align: center; font-size: 11px; font-weight: 800;
+      color: var(--text-faint); flex-shrink: 0;
     }
-    .track-meta-title {
-      font-size:12px;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow:ellipsis;
-    }
-    .track-meta-sub {
-      display:flex;
-      justify-content:space-between;
-      gap:4px;
-      font-size:10px;
-      color:var(--text-sub);
-      margin-top:2px;
-    }
-    .track-actions {
-      display:flex;
-      gap:4px;
-      justify-content:flex-end;
-    }
-    .track-actions .btn-icon {
-      width:24px;
-      height:24px;
-      font-size:12px;
-    }
-    .btn-fav-active {
-      background:radial-gradient(circle at 30% 0, rgba(255,255,255,0.2), var(--accent-red));
-      color:#fff5f7;
-      box-shadow:0 0 12px rgba(255,92,122,0.95);
-    }
+    .track-item > div:nth-child(2) { flex: 1; min-width: 0; }
+    .track-meta-title { font-size: 13px; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-meta-sub { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-sub); margin-top: 2px; overflow: hidden; }
+    .track-meta-sub > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-meta-sub > span { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    .track-meta-sub > span:first-child { flex-shrink: 1; }
+    .track-actions { display: flex; gap: 4px; flex-shrink: 0; }
+    .track-actions .btn-icon { width: 29px; height: 29px; border-radius: 9px; }
+    .track-actions .btn-icon .ic { width: 14px; height: 14px; }
 
-    footer {
-      font-size:10px;
-      color:var(--text-sub);
-      text-align:right;
-      padding:0 4px 2px;
-      flex-shrink: 0;
-    }
+    /* ===== footer ===== */
+    footer { text-align: center; font-size: 11px; color: var(--text-faint); padding: 2px 0 6px; }
 
-    #toast {
-      position:fixed;
-      left:50%;
-      bottom:18px;
-      transform:translateX(-50%);
-      padding:8px 14px;
-      border-radius:999px;
-      background:rgba(8,10,26,0.96);
-      border:1px solid rgba(255,255,255,0.15);
-      font-size:11px;
-      color:var(--text-main);
-      box-shadow:0 12px 30px rgba(0,0,0,0.9);
-      opacity:0;
-      pointer-events:none;
-      transition:opacity .2s ease, transform .2s ease;
-      z-index:1500;
-    }
-    #toast.show {
-      opacity:1;
-      transform:translateX(-50%) translateY(-4px);
-    }
-
-    /* 柔和水波纹：双圈 */
-    .ripple-circle,
-    .ripple-circle-inner {
-      position:absolute;
-      border-radius:50%;
-      pointer-events:none;
-      transform:translate(-50%,-50%) scale(0);
-      opacity:0.9;
-      z-index:20;
-    }
-
-    .ripple-circle {
-      border:2px solid rgba(255,223,140,0.85);
-      box-shadow:0 0 14px rgba(255,223,140,0.9);
-      background:radial-gradient(circle, rgba(255,250,220,0.45), rgba(255,223,140,0.0));
-      animation:rippleOuter .75s cubic-bezier(0.22,0.61,0.36,1) forwards;
-    }
-    .ripple-circle-inner {
-      border:1px solid rgba(130,196,255,0.9);
-      box-shadow:0 0 16px rgba(130,196,255,0.9);
-      background:radial-gradient(circle, rgba(255,255,255,0.35), rgba(102,196,255,0.0));
-      animation:rippleInner .75s cubic-bezier(0.22,0.61,0.36,1) forwards;
-      z-index:19;
-    }
-    @keyframes rippleOuter {
-      to {
-        transform:translate(-50%,-50%) scale(2.4);
-        opacity:0;
-      }
-    }
-    @keyframes rippleInner {
-      to {
-        transform:translate(-50%,-50%) scale(1.7);
-        opacity:0;
-      }
-    }
-
-    /* 滚动条 */
-    .search-results-mini::-webkit-scrollbar,
-    .playlist-main::-webkit-scrollbar,
-    .lyrics-container::-webkit-scrollbar {
-      width:6px;
-    }
-    .search-results-mini::-webkit-scrollbar-track,
-    .playlist-main::-webkit-scrollbar-track,
-    .lyrics-container::-webkit-scrollbar-track {
-      background:rgba(4,6,22,0.65);
-      border-radius:999px;
-    }
-    .search-results-mini::-webkit-scrollbar-thumb,
-    .playlist-main::-webkit-scrollbar-thumb,
-    .lyrics-container::-webkit-scrollbar-thumb {
-      border-radius:999px;
-      background:linear-gradient(180deg, rgba(122,182,255,0.9), rgba(255,196,120,0.9));
-      box-shadow:0 0 8px rgba(130,190,255,0.9);
-    }
-    .search-results-mini,
-    .playlist-main,
-    .lyrics-container {
-      scrollbar-width:thin;
-      scrollbar-color:rgba(130,190,255,0.9) rgba(4,6,22,0.65);
-    }
-
-    /* 弹窗 */
+    /* ===== 弹窗 ===== */
     .modal-backdrop {
-      position:fixed;
-      inset:0;
-      background:rgba(5,7,20,0.86);
-      backdrop-filter:blur(18px);
-      display:none;
-      align-items:center;
-      justify-content:center;
-      z-index:2000;
+      position: fixed; inset: 0; z-index: 60;
+      background: rgba(30,42,70,.35); backdrop-filter: blur(6px);
+      display: none; align-items: center; justify-content: center; padding: 18px;
     }
-    .modal-backdrop.show { display:flex; }
-
+    .modal-backdrop.show { display: flex; animation: fadeIn .18s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; } }
     .modal {
-      background:radial-gradient(circle at 0 0, rgba(255,255,255,0.08), transparent 60%), rgba(10,14,40,0.98);
-      border-radius:18px;
-      padding:16px 20px 14px;
-      box-shadow:0 20px 40px rgba(0,0,0,0.9);
-      max-width:380px;
-      width:92%;
-      color:#f5f6ff;
-      position:relative;
-      border:1px solid rgba(255,255,255,0.18);
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 20px; box-shadow: var(--shadow-lg);
+      width: min(430px, 94vw); max-height: 88vh; overflow-y: auto;
+      padding: 18px 20px; position: relative;
+      animation: popIn .2s cubic-bezier(.2,.9,.3,1.2);
     }
-
-    .modal-header {
-      display:flex;
-      justify-content:space-between;
-      align-items:center;
-      font-size:14px;
-      margin-bottom:6px;
-    }
-    .modal-title-wrap {
-      display:flex;
-      align-items:center;
-      gap:6px;
-    }
+    @keyframes popIn { from { transform: scale(.95) translateY(8px); opacity: 0; } }
+    .modal.modal-wide { width: min(880px, 94vw); }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .modal-title-wrap { display: flex; align-items: center; gap: 10px; font-family: "Baloo 2", "Nunito", sans-serif; font-size: 17px; font-weight: 600; }
     .modal-title-icon {
-      width:22px;
-      height:22px;
-      border-radius:999px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      font-size:14px;
-      background:radial-gradient(circle at 30% 0, rgba(255,255,255,0.32), rgba(255,217,140,0.9));
-      box-shadow:0 0 10px rgba(255,217,140,0.8);
+      width: 34px; height: 34px; border-radius: 11px;
+      background: var(--accent-soft); color: var(--accent);
+      display: inline-flex; align-items: center; justify-content: center; font-size: 15px;
     }
+    .modal-title-icon .ic { width: 17px; height: 17px; }
     .modal-close-btn {
-      border:none;
-      background:transparent;
-      color:#aaa;
-      font-size:18px;
-      cursor:pointer;
+      width: 30px; height: 30px; border-radius: 10px; border: none;
+      background: var(--card-soft); color: var(--text-sub); font-size: 17px;
+      cursor: pointer; transition: all .18s;
+      display: inline-flex; align-items: center; justify-content: center;
     }
+    .modal-close-btn:hover { background: #ffe9ec; color: var(--accent-red); }
+    .modal-desc { font-size: 12.5px; color: var(--text-sub); margin: 6px 0 12px; line-height: 1.6; }
+    .modal input[type=text], .modal input:not([type]), #playlist-name-input {
+      width: 100%; font-family: inherit; font-size: 13.5px;
+      background: var(--card-soft); color: var(--text-main);
+      border: 1.5px solid var(--border); border-radius: 12px;
+      padding: 10px 12px; outline: none; transition: border-color .18s;
+    }
+    .modal input:focus { border-color: var(--accent); background: #fff; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
-    .modal-desc {
-      margin:2px 0 8px;
-      font-size:11px;
-      color:var(--text-sub);
-    }
-
-    .modal input {
-      width:100%;
-      padding:7px 10px;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,0.22);
-      background:rgba(4,6,20,0.96);
-      color:var(--text-main);
-      font-size:12px;
-      outline:none;
-      margin-bottom:10px;
-    }
-    .modal-actions {
-      display:flex;
-      justify-content:flex-end;
-      gap:8px;
-      margin-top:4px;
-    }
-
-    /* 快捷键说明 */
-    .shortcut-grid {
-      display:grid;
-      grid-template-columns:repeat(2,minmax(0,1fr));
-      gap:6px;
-      margin-top:6px;
-      font-size:12px;
-    }
+    /* 快捷键弹窗 */
+    .shortcut-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
     .shortcut-card {
-      border-radius:12px;
-      padding:6px 8px;
-      background:rgba(15,18,52,0.95);
-      border:1px solid rgba(255,255,255,0.12);
-      display:flex;
-      flex-direction:column;
-      gap:3px;
+      background: var(--card-soft); border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 12px;
+      display: flex; flex-direction: column; gap: 6px;
     }
-    .shortcut-label { font-size:11px; color:var(--text-sub); }
-    .shortcut-key { display:flex; flex-wrap:wrap; gap:3px; }
-    .shortcut-key kbd {
-      padding:2px 6px;
-      border-radius:6px;
-      border:1px solid rgba(255,255,255,0.4);
-      font-size:11px;
-      background:rgba(0,0,0,0.3);
+    .shortcut-label { font-size: 12px; color: var(--text-sub); font-weight: 700; }
+    .shortcut-key { display: flex; gap: 4px; }
+    .shortcut-key kbd, kbd {
+      font-family: inherit; font-size: 11px; font-weight: 800;
+      background: #fff; color: var(--text-main);
+      border: 1px solid var(--border-strong); border-bottom-width: 2.5px;
+      border-radius: 7px; padding: 2px 8px;
     }
 
-    @media (max-width:1080px){
-      .layout{
-        grid-template-columns:1.1fr 1.2fr;
-        grid-template-rows:minmax(260px,0.9fr) minmax(260px,1.1fr);
-        grid-template-areas:
-          "player player"
-          "search playlist";
-      }
-      .search-panel{grid-area:search;}
-      .player-panel{grid-area:player;}
-      .playlist-panel{grid-area:playlist;}
+    /* ===== 设置弹窗 ===== */
+    .set-section {
+      margin: 12px 0 0; padding: 14px;
+      border: 1px solid var(--border); border-radius: 14px;
+      background: var(--card-soft);
     }
-    @media (max-width:860px){
-      header{
-        flex-direction:column;
-        align-items:flex-start;
-        gap:6px;
-      }
-      .header-controls{
-        width:100%;
-        justify-content:space-between;
-      }
-      .layout{
-        grid-template-columns:1fr;
-        grid-template-rows:auto auto auto;
-        grid-template-areas:
-          "player"
-          "search"
-          "playlist";
-      }
+    .set-section h4 {
+      margin: 0 0 10px; font-size: 13.5px; font-weight: 800;
+      color: var(--text-main); letter-spacing: .3px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;
     }
-    /* ===== musicdl 设置 / 下载管理 ===== */
-    .modal.modal-wide{width:min(880px,94vw);max-height:86vh;overflow-y:auto;}
-    .set-section{margin:14px 0 0;padding:12px;border:1px solid var(--border-subtle);border-radius:14px;background:var(--panel-glass-soft);}
-    .set-section h4{margin:0 0 10px;font-size:14px;color:var(--accent);letter-spacing:.5px;}
-    .set-section h4 .set-tools{float:right;display:flex;gap:6px;}
-    .set-cat{margin-bottom:8px;}
-    .set-cat-name{font-size:12px;color:var(--text-sub);margin:6px 0 4px;}
-    .set-src-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:4px 10px;}
-    .set-src-grid label{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-sub);cursor:pointer;padding:3px 4px;border-radius:8px;}
-    .set-src-grid label:hover{color:var(--text-main);background:rgba(255,255,255,.04);}
-    .set-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;}
-    .set-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-sub);}
-    .set-field input[type=text],.set-field input[type=number],.set-section textarea{background:rgba(0,0,0,.35);border:1px solid var(--border-subtle);border-radius:10px;color:var(--text-main);padding:8px 10px;font-size:13px;outline:none;font-family:inherit;}
-    .set-field input:focus,.set-section textarea:focus{border-color:var(--accent);}
-    .set-switches{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px 14px;}
-    .set-switches label{display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--text-sub);cursor:pointer;padding:3px 0;}
-    .ck-row{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;}
-    .ck-row .ck-name{font-size:12.5px;color:var(--text-main);display:flex;align-items:center;gap:6px;}
-    .ck-row textarea{width:100%;min-height:34px;resize:vertical;}
-    .set-json textarea{width:100%;min-height:80px;resize:vertical;font-family:Consolas,monospace;font-size:12px;}
-    .set-json textarea.bad{border-color:var(--accent-red)!important;}
-    .set-save-row{display:flex;align-items:center;gap:12px;margin-top:14px;}
-    .set-hint{font-size:11.5px;color:var(--text-sub);line-height:1.5;}
-    details.set-json summary{cursor:pointer;color:var(--text-sub);font-size:13px;margin-bottom:8px;}
-    .dl-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid var(--border-subtle);font-size:13px;}
-    .dl-item:last-child{border-bottom:none;}
-    .dl-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .dl-sub{color:var(--text-sub);font-size:11.5px;white-space:nowrap;}
-    .dl-state{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border-subtle);color:var(--text-sub);white-space:nowrap;}
-    .dl-state.running{color:var(--accent);border-color:var(--accent);}
-    .dl-state.done{color:var(--accent-green);border-color:var(--accent-green);}
-    .dl-state.failed,.dl-state.partial{color:var(--accent-red);border-color:var(--accent-red);}
-    .dl-empty{color:var(--text-sub);font-size:12.5px;text-align:center;padding:14px 0;}
+    .set-section h4 .set-tools { display: flex; gap: 6px; float: none; }
+    .set-section h4 .set-tools .btn { font-size: 11.5px; padding: 4px 10px; }
+    .set-cat { margin-bottom: 10px; }
+    .set-cat-name { font-size: 11.5px; color: var(--accent-deep); font-weight: 800; margin: 4px 0 6px; }
+    .set-src-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 3px 8px; }
+    .set-src-grid label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; font-weight: 600; color: var(--text-sub);
+      cursor: pointer; padding: 4px 6px; border-radius: 8px; transition: all .12s;
+    }
+    .set-src-grid label:hover { color: var(--text-main); background: #fff; }
+    .set-src-grid input { accent-color: var(--accent); margin: 0; }
+    .set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+    .set-field { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; font-weight: 700; color: var(--text-sub); }
+    .set-field input[type=text], .set-field input[type=number], .set-section textarea {
+      font-family: inherit; font-size: 13px; color: var(--text-main);
+      background: #fff; border: 1.5px solid var(--border);
+      border-radius: 10px; padding: 8px 10px; outline: none; transition: border-color .15s;
+      width: 100%;
+    }
+    .set-field input:focus, .set-section textarea:focus { border-color: var(--accent); }
+    .set-switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 4px 12px; }
+    .set-switches label {
+      display: flex; gap: 8px; align-items: center;
+      font-size: 12px; font-weight: 600; color: var(--text-sub);
+      cursor: pointer; padding: 4px 0;
+    }
+    .set-switches input { accent-color: var(--accent); margin: 0; }
+    .ck-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+    .ck-row .ck-name { font-size: 12px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px; }
+    .ck-row textarea { width: 100%; min-height: 36px; resize: vertical; }
+    .set-json textarea { width: 100%; min-height: 84px; resize: vertical; font-family: Consolas, monospace; font-size: 12px; }
+    .set-json textarea.bad { border-color: var(--accent-red) !important; }
+    .set-save-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+    .set-save-row .btn { background: linear-gradient(135deg, var(--accent), var(--accent-deep)); color: #fff; border: none; padding: 9px 22px; box-shadow: 0 3px 10px rgba(79,124,255,.35); }
+    .set-save-row .btn:hover { color:#fff; }
+    .set-hint { font-size: 11.5px; color: var(--text-faint); line-height: 1.5; }
+    details.set-json summary { cursor: pointer; color: var(--text-sub); font-size: 12.5px; font-weight: 700; margin-bottom: 8px; }
+
+    /* ===== 下载管理弹窗 ===== */
+    .dl-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 4px; border-bottom: 1px solid var(--border);
+      font-size: 12.5px;
+    }
+    .dl-item:last-child { border-bottom: none; }
+    .dl-item .btn-icon { width: 28px; height: 28px; border-radius: 9px; }
+    .dl-item .btn-icon .ic { width: 13px; height: 13px; }
+    .dl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--text-main); }
+    .dl-sub { color: var(--text-faint); font-size: 11px; white-space: nowrap; font-weight: 600; }
+    .dl-state {
+      font-size: 10.5px; font-weight: 800; padding: 2px 9px; border-radius: 999px;
+      background: var(--card); border: 1px solid var(--border); color: var(--text-sub);
+      white-space: nowrap;
+    }
+    .dl-state.running { color: var(--accent-deep); background: var(--accent-soft); border-color: rgba(79,124,255,.4); }
+    .dl-state.done { color: var(--accent-green); background: #e7f9f2; border-color: rgba(24,184,128,.35); }
+    .dl-state.failed, .dl-state.partial { color: var(--accent-red); background: #ffeef0; border-color: rgba(239,77,94,.3); }
+    .dl-empty { color: var(--text-faint); font-size: 12px; text-align: center; padding: 14px 0; font-weight: 600; }
+    .dl-logbox {
+      font-family: Consolas, monospace; font-size: 11.5px; line-height: 1.65;
+      background: #fff; border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 12px; max-height: 220px; overflow-y: auto; word-break: break-all;
+    }
+    .log-line { color: var(--text-sub); }
+    .log-line .log-t { color: var(--text-faint); margin-right: 6px; }
+    .log-line.log-warning { color: #c07d00; }
+    .log-line.log-error { color: var(--accent-red); }
+    .log-line.log-debug { color: var(--text-faint); }
+
+    /* ===== toast ===== */
+    #toast {
+      position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%) translateY(20px);
+      background: #273049; color: #fff; font-size: 13px; font-weight: 700;
+      border-radius: 999px; padding: 10px 22px;
+      box-shadow: var(--shadow-lg);
+      opacity: 0; pointer-events: none; transition: all .25s; z-index: 99;
+      max-width: 90vw; text-align: center;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ===== 点击水波纹 ===== */
+    .ripple-circle, .ripple-circle-inner {
+      position: absolute; border-radius: 50%; pointer-events: none;
+      transform: translate(-50%, -50%) scale(0);
+      background: rgba(79,124,255,.16);
+      animation: ripple .7s ease-out forwards;
+    }
+    .ripple-circle-inner { background: rgba(79,124,255,.1); animation-duration: .55s; }
+    @keyframes ripple { to { transform: translate(-50%, -50%) scale(1); opacity: 0; } }
+
+    /* ===== 滚动条 ===== */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
+    /* ===== 响应式 ===== */
+    @media (max-width: 1280px) {
+      .layout { grid-template-columns: 300px minmax(0,1fr) 330px; gap: 12px; }
+      .cover-wrapper { width: 140px; height: 140px; }
+      .track-title { font-size: 19px; }
+    }
+
+    @media (max-width: 1080px) {
+      html, body { overflow: auto; height: auto; }
+      .app { height: auto; min-height: 100vh; padding: 12px 12px 8px; }
+      .layout { display: flex; flex-direction: column; }
+      .player-panel { order: -1; }
+      .search-results-mini { max-height: 320px; flex: none; }
+      .lyrics-container { max-height: 260px; flex: none; }
+      .playlist-main { max-height: 480px; }
+      .header-controls { width: auto; }
+    }
+
+    @media (max-width: 640px) {
+      .app { padding: 10px 8px 6px; gap: 10px; }
+      header { padding: 10px 12px; }
+      .title-text h1 { font-size: 17px; }
+      .title-text p { font-size: 11px; }
+      .pikachu-box { width: 42px; height: 42px; }
+      .pikachu-img { width: 36px; height: 36px; }
+      .player-top { flex-direction: column; padding: 4px 12px 10px; }
+      .cover-wrapper { width: 128px; height: 128px; margin: 0 auto; }
+      .track-title { font-size: 18px; text-align: center; }
+      .track-artist { text-align: center; }
+      .track-tags { justify-content: center; }
+      .track-title-row { flex-direction: column; align-items: center; gap: 8px; }
+      .player-actions { flex-direction: row; align-items: center; }
+      .lyrics-container { margin: 0 12px 12px; max-height: 200px; }
+      .panel-header { padding: 12px 12px 8px; }
+      .search-panel-content { padding: 0 12px 12px; }
+      .playlist-main { padding: 0 12px 12px; }
+      .playlist-tabs { width: 100%; justify-content: space-between; }
+      .playlist-tab { flex: 1; text-align: center; padding: 6px 4px; }
+      .modal { padding: 14px; }
+      .set-src-grid { grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); }
+      .set-grid { grid-template-columns: 1fr; }
+      .control-main .play-btn { width: 50px; height: 50px; }
+      .volume-slider { width: 76px; }
+      .shortcut-toggle-btn { width: 34px; height: 34px; }
+    }
   </style>
 </head>
 <body>
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><rect x="3" y="14" width="4" height="7" rx="2"/><rect x="17" y="14" width="4" height="7" rx="2"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7Z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.6v12.8c0 .8.9 1.3 1.6.9l10-6.4a1 1 0 0 0 0-1.8l-10-6.4A1 1 0 0 0 8 5.6Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1.2"/><rect x="14" y="4" width="4" height="16" rx="1.2"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 20 9 12l10-8v16Z"/><path d="M5 19V5"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8V4Z"/><path d="M19 5v14"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+    <symbol id="i-repeat1" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10.5 12.5 10v4"/></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.8-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.5-.6-3.3-1.7l-.5-.8"/><path d="m18 14 4 4-4 4"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+  </svg>
   <canvas id="bg-canvas"></canvas>
 
   <div class="app">
@@ -1270,8 +685,8 @@
           <img src="pikachu.gif" alt="Pikachu" class="pikachu-img">
         </div>
         <div class="title-text">
-          <h1 data-i18n="appTitle">皮卡丘的音乐站</h1>
-          <p data-i18n="authorLabel">作者：Zhenchao Jin + GPT 5.1</p>
+          <h1 data-i18n="appTitle">我的音乐站</h1>
+          <p data-i18n="authorLabel">本地部署 · musicdl 驱动</p>
         </div>
       </div>
       <div class="header-controls">
@@ -1282,9 +697,9 @@
         <div class="shortcut-hint" data-i18n="shortcutHint">
           快捷键：Space 播放/暂停 · ←/→ 跳转 · ↑/↓ 音量 · N/P 切歌 · F 收藏 · L 切换歌词效果
         </div>
-        <button id="shortcut-toggle-btn" class="shortcut-toggle-btn ripple-target" title="快捷键说明">⌨️</button>
-        <button id="downloads-toggle-btn" class="shortcut-toggle-btn ripple-target" title="下载管理">⬇️</button>
-        <button id="settings-toggle-btn" class="shortcut-toggle-btn ripple-target" title="设置">⚙️</button>
+        <button id="shortcut-toggle-btn" class="shortcut-toggle-btn ripple-target" title="快捷键说明"><svg class="ic"><use href="#i-keyboard"/></svg></button>
+        <button id="downloads-toggle-btn" class="shortcut-toggle-btn ripple-target" title="下载管理 / 日志"><svg class="ic"><use href="#i-download"/></svg></button>
+        <button id="settings-toggle-btn" class="shortcut-toggle-btn ripple-target" title="设置"><svg class="ic"><use href="#i-settings"/></svg></button>
       </div>
     </header>
 
@@ -1293,14 +708,14 @@
       <section class="panel search-panel ripple-target">
         <div class="panel-header">
           <div class="panel-title">
-            <span class="icon">🔍</span>
+            <span class="icon"><svg class="ic"><use href="#i-search"/></svg></span>
             <span data-i18n="searchTitle">歌曲搜索</span>
           </div>
           <span class="chip" data-i18n="searchSubtitle">musicdl 驱动 · 40+ 音源</span>
         </div>
         <div class="search-panel-content">
           <div class="search-row ripple-target">
-            <span class="search-prefix">🔍</span>
+            <span class="search-prefix"><svg class="ic"><use href="#i-search"/></svg></span>
             <input id="search-input" class="input" type="text"
                    placeholder="输入歌名 / 歌手，回车搜索…" />
             <button id="search-btn" class="btn ripple-target" data-i18n="searchButton">搜索</button>
@@ -1335,7 +750,7 @@
       <section class="panel player-panel ripple-target">
         <div class="panel-header">
           <div class="panel-title">
-            <span class="icon">🎧</span>
+            <span class="icon"><svg class="ic"><use href="#i-headphones"/></svg></span>
             <span data-i18n="playerTitle">正在播放</span>
           </div>
           <span class="chip" data-i18n="playerSubtitle">歌词动态高亮 · 炫酷霓虹</span>
@@ -1361,8 +776,8 @@
               </div>
               <div class="player-actions">
                 <div class="player-btn-row">
-                  <button id="fav-btn" class="btn btn-secondary btn-icon ripple-target" title="收藏 (F)">❤</button>
-                  <button id="download-btn" class="btn btn-secondary btn-icon ripple-target" title="下载">⬇</button>
+                  <button id="fav-btn" class="btn btn-secondary btn-icon ripple-target" title="收藏 (F)"><svg class="ic"><use href="#i-heart"/></svg></button>
+                  <button id="download-btn" class="btn btn-secondary btn-icon ripple-target" title="下载"><svg class="ic"><use href="#i-download"/></svg></button>
                 </div>
                 <div id="player-status" class="status-pill" data-i18n="playerStatusIdle">空闲</div>
               </div>
@@ -1379,12 +794,12 @@
               </div>
               <div class="control-row">
                 <div class="control-main">
-                  <button id="prev-btn" class="btn btn-secondary btn-icon ripple-target" title="上一首 (P)">⏮</button>
-                  <button id="play-btn" class="btn play-btn ripple-target" title="播放/暂停 (Space)">▶</button>
-                  <button id="next-btn" class="btn btn-secondary btn-icon ripple-target" title="下一首 (N)">⏭</button>
+                  <button id="prev-btn" class="btn btn-secondary btn-icon ripple-target" title="上一首 (P)"><svg class="ic"><use href="#i-prev"/></svg></button>
+                  <button id="play-btn" class="btn play-btn ripple-target" title="播放/暂停 (Space)"><svg class="ic"><use href="#i-play"/></svg></button>
+                  <button id="next-btn" class="btn btn-secondary btn-icon ripple-target" title="下一首 (N)"><svg class="ic"><use href="#i-next"/></svg></button>
                 </div>
                 <div class="control-secondary">
-                  <span>🔊</span>
+                  <svg class="ic"><use href="#i-volume"/></svg>
                   <input id="volume-slider" class="volume-slider" type="range" min="0" max="1" step="0.01" value="0.8" />
                 </div>
               </div>
@@ -1407,7 +822,7 @@
       <section class="panel playlist-panel ripple-target">
         <div class="panel-header">
           <div class="panel-title">
-            <span class="icon">📜</span>
+            <span class="icon"><svg class="ic"><use href="#i-list"/></svg></span>
             <span data-i18n="playlistTitle">播放列表</span>
           </div>
           <div class="playlist-tabs ripple-target">
@@ -1422,15 +837,15 @@
             <div class="playlist-top-row">
               <span id="playlist-info" class="playlist-info"></span>
               <div class="playmode-row">
-                <button class="playmode-btn active ripple-target" data-mode="list" title="列表循环">🔁</button>
-                <button class="playmode-btn ripple-target" data-mode="single" title="单曲循环">🔂</button>
-                <button class="playmode-btn ripple-target" data-mode="shuffle" title="随机播放">🔀</button>
+                <button class="playmode-btn active ripple-target" data-mode="list" title="列表循环"><svg class="ic"><use href="#i-repeat"/></svg></button>
+                <button class="playmode-btn ripple-target" data-mode="single" title="单曲循环"><svg class="ic"><use href="#i-repeat1"/></svg></button>
+                <button class="playmode-btn ripple-target" data-mode="shuffle" title="随机播放"><svg class="ic"><use href="#i-shuffle"/></svg></button>
               </div>
             </div>
             <div id="playlist-select-row" class="playlist-select-row" style="display:none;">
               <div class="playlist-select-tools">
                 <select id="playlist-select"></select>
-                <button id="add-current-btn" class="btn btn-secondary btn-icon ripple-target" title="把当前歌曲加入歌单">＋</button>
+                <button id="add-current-btn" class="btn btn-secondary btn-icon ripple-target" title="把当前歌曲加入歌单"><svg class="ic"><use href="#i-plus"/></svg></button>
                 <button id="delete-playlist-btn" class="btn btn-ghost ripple-target" data-i18n="deletePlaylist">删除歌单</button>
               </div>
               <div class="playlist-file-actions">
@@ -1447,7 +862,7 @@
     </main>
 
     <footer>
-      <span data-i18n="footerText">本站仅作为学习演示，音乐版权归各平台与原作者所有。</span>
+      <span data-i18n="footerText">仅供个人学习使用，音乐版权归各平台与原作者所有。</span>
     </footer>
   </div>
 
@@ -1456,7 +871,7 @@
     <div class="modal ripple-target">
       <div class="modal-header">
         <div class="modal-title-wrap">
-          <div class="modal-title-icon">🎵</div>
+          <div class="modal-title-icon"><svg class="ic"><use href="#i-note"/></svg></div>
           <span data-i18n="modalNewPlaylistTitle">新建歌单</span>
         </div>
         <button id="playlist-close" class="modal-close-btn">×</button>
@@ -1475,13 +890,13 @@
     <div class="modal ripple-target">
       <div class="modal-header">
         <div class="modal-title-wrap">
-          <div class="modal-title-icon">⌨️</div>
+          <div class="modal-title-icon"><svg class="ic"><use href="#i-keyboard"/></svg></div>
           <span data-i18n="shortcutPanelTitle">快捷键说明</span>
         </div>
         <button id="shortcut-close" class="modal-close-btn">×</button>
       </div>
       <p class="modal-desc" data-i18n="shortcutPanelDesc">
-        使用键盘可以更加方便地控制皮卡丘的音乐站：
+        使用键盘可以更加方便地控制播放：
       </p>
       <div class="shortcut-grid">
         <div class="shortcut-card">
@@ -1528,8 +943,8 @@
     <div class="modal modal-wide ripple-target">
       <div class="modal-header">
         <div class="modal-title-wrap">
-          <div class="modal-title-icon">⚙️</div>
-          <span>设置（musicdl）</span>
+          <div class="modal-title-icon"><svg class="ic"><use href="#i-settings"/></svg></div>
+          <span>设置</span>
         </div>
         <button id="settings-close" class="modal-close-btn">×</button>
       </div>
@@ -1605,7 +1020,7 @@
     <div class="modal modal-wide ripple-target">
       <div class="modal-header">
         <div class="modal-title-wrap">
-          <div class="modal-title-icon">⬇️</div>
+          <div class="modal-title-icon"><svg class="ic"><use href="#i-download"/></svg></div>
           <span>下载管理</span>
         </div>
         <button id="downloads-close" class="modal-close-btn">×</button>
@@ -1619,6 +1034,10 @@
         <h4>已下载文件</h4>
         <div id="dl-files"><div class="dl-empty">加载中…</div></div>
       </div>
+      <div class="set-section">
+        <h4>运行日志</h4>
+        <div id="dl-logs" class="dl-logbox"><div class="dl-empty">加载中…</div></div>
+      </div>
     </div>
   </div>
 
@@ -1628,11 +1047,11 @@
   (function(){
     const translations = {
       zh: {
-        appTitle:"皮卡丘的音乐站",
-        authorLabel:"作者：Zhenchao Jin + GPT 5.1",
+        appTitle:"我的音乐站",
+        authorLabel:"本地部署 · musicdl 驱动",
         shortcutHint:"快捷键：Space 播放/暂停 · ←/→ 跳转 · ↑/↓ 音量 · N/P 切歌 · F 收藏 · L 切换歌词效果",
         shortcutPanelTitle:"快捷键说明",
-        shortcutPanelDesc:"使用键盘可以更加方便地控制皮卡丘的音乐站：",
+        shortcutPanelDesc:"使用键盘可以更加方便地控制播放：",
         shortcutPlayPause:"播放 / 暂停",
         shortcutSeek:"快退 / 快进 5 秒",
         shortcutVolume:"音量加 / 减",
@@ -1672,7 +1091,7 @@
         exportPlaylist:"导出歌单",
         deletePlaylist:"删除歌单",
         removeFromPlaylist:"从歌单移除",
-        footerText:"本站仅作为学习演示，音乐版权归各平台与原作者所有。",
+        footerText:"仅供个人学习使用，音乐版权归各平台与原作者所有。",
         toastAddedFavorite:"已添加到收藏",
         toastRemovedFavorite:"已从收藏移除",
         toastAddedToPlaylist:"已添加到歌单",
@@ -1709,11 +1128,11 @@
         modalCancel:"取消"
       },
       en: {
-        appTitle:"Pikachu Music Station",
-        authorLabel:"Author: Zhenchao Jin + GPT 5.1",
+        appTitle:"My Music Hub",
+        authorLabel:"Self-hosted · Powered by musicdl",
         shortcutHint:"Shortcuts: Space Play/Pause · ←/→ Seek · ↑/↓ Volume · N/P Track · F Fav · L Lyrics FX",
         shortcutPanelTitle:"Keyboard Shortcuts",
-        shortcutPanelDesc:"Control Pikachu Music Station more easily with your keyboard:",
+        shortcutPanelDesc:"Control playback more easily with your keyboard:",
         shortcutPlayPause:"Play / Pause",
         shortcutSeek:"Seek backward / forward 5s",
         shortcutVolume:"Volume up / down",
@@ -1753,7 +1172,7 @@
         exportPlaylist:"Export",
         deletePlaylist:"Delete",
         removeFromPlaylist:"Remove from playlist",
-        footerText:"For demo only. All music copyrights belong to original owners.",
+        footerText:"Personal use only. All music copyrights belong to original owners.",
         toastAddedFavorite:"Added to favorites",
         toastRemovedFavorite:"Removed from favorites",
         toastAddedToPlaylist:"Added to playlist",
@@ -2981,6 +2400,12 @@
         txt.textContent=sourceLabel(track.source);
         src.appendChild(dot);src.appendChild(txt);
         right.appendChild(badge);right.appendChild(src);
+        if(track.ext){
+          const q=document.createElement('div');
+          q.className='mini-quality'+(String(track.quality)==='lossless'?' q-lossless':'');
+          q.textContent=String(track.ext).toUpperCase()+(track.fileSize?' '+track.fileSize:'');
+          right.appendChild(q);
+        }
         item.appendChild(meta);item.appendChild(right);
         item.addEventListener('click',()=>{
           const visible=getInterleavedSearchList();
@@ -3050,18 +2475,28 @@
         const txt=document.createElement('span'); txt.textContent=sourceLabel(track.source);
         sSpan.appendChild(dot);sSpan.appendChild(txt);
         sub.appendChild(aSpan);sub.appendChild(sSpan);
+        if(track.ext){
+          const qSpan=document.createElement('span');
+          qSpan.className='q-badge'+(String(track.quality)==='lossless'?' q-lossless':'');
+          qSpan.textContent=String(track.ext).toUpperCase()+(track.fileSize?' · '+track.fileSize:'');
+          sub.appendChild(qSpan);
+        }
         meta.appendChild(title);meta.appendChild(sub);
 
         const act=document.createElement('div');
         act.className='track-actions';
         const pBtn=document.createElement('button');
-        pBtn.className='btn btn-secondary btn-icon ripple-target'; pBtn.textContent='▶';
+        pBtn.className='btn btn-secondary btn-icon ripple-target'; pBtn.innerHTML=icon('play'); pBtn.title=state.language==='zh'?'播放':'Play';
         const fBtn=document.createElement('button');
-        fBtn.className='btn btn-secondary btn-icon ripple-target'; fBtn.textContent='❤';
+        fBtn.className='btn btn-secondary btn-icon ripple-target'; fBtn.innerHTML=icon('heart'); fBtn.title=state.language==='zh'?'收藏':'Favorite';
         if(isFavorite(track)) fBtn.classList.add('btn-fav-active');
+        const dBtn=document.createElement('button');
+        dBtn.className='btn btn-secondary btn-icon ripple-target'; dBtn.innerHTML=icon('download');
+        dBtn.title=state.language==='zh'?'下载此版本':'Download this version';
+        dBtn.addEventListener('click',ev=>{ev.stopPropagation();downloadTrackRow(track);});
         const removeBtn=document.createElement('button');
         removeBtn.className='btn btn-ghost btn-icon ripple-target';
-        removeBtn.textContent='×';
+        removeBtn.innerHTML=icon('x');
         removeBtn.title=t('removeFromPlaylist');
 
         pBtn.addEventListener('click',ev=>{
@@ -3095,6 +2530,7 @@
         });
         act.appendChild(pBtn);
         act.appendChild(fBtn);
+        act.appendChild(dBtn);
         if(activeTab==='playlists') act.appendChild(removeBtn);
         item.appendChild(index);item.appendChild(meta);item.appendChild(act);
         item.addEventListener('click',()=>pBtn.click());
@@ -3388,12 +2824,12 @@
       });
       dom.audio.addEventListener('play',()=>{
         state.isPlaying=true;
-        dom.playBtn.textContent='⏸';
+        dom.playBtn.innerHTML=icon('pause');
         dom.playerStatus.textContent=t('playerStatusPlaying');
       });
       dom.audio.addEventListener('pause',()=>{
         state.isPlaying=false;
-        dom.playBtn.textContent='▶';
+        dom.playBtn.innerHTML=icon('play');
         dom.playerStatus.textContent=t('playerStatusPaused');
         audioLevel = 0;
       });
@@ -3530,6 +2966,19 @@
     function applySourceDot(el,s){const c=sourceColor(s);el.style.background=c;el.style.color=c;}
     function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
     function fmtSize(n){return n>1048576?(n/1048576).toFixed(1)+' MB':(n/1024).toFixed(0)+' KB';}
+    function icon(n){return '<svg class="ic"><use href="#i-'+n+'"/></svg>';}
+
+    // 列表行内下载：结果里同一首歌会有多个 格式/大小 版本，看音质徽标挑着下
+    async function downloadTrackRow(track){
+      try{
+        if(!track.backendId){
+          const nd=await API.send('/api/resolve',{source:track.source,title:track.title||'',artist:track.artist||'',keyword:track.keyword||''});
+          track.backendId=nd.id;
+        }
+        await API.send('/api/download',{ids:[track.backendId]});
+        showToast((state.language==='zh'?'已加入下载：':'Queued: ')+(track.title||''));
+      }catch(e){ showToast((state.language==='zh'?'下载失败: ':'Download failed: ')+e.message); }
+    }
 
     async function loadBackend(){
       [META,CONFIG]=await Promise.all([API.get('/api/meta'),API.get('/api/config')]);
@@ -3699,7 +3148,7 @@
         dom.audio.src=track.audioUrl;
         await dom.audio.play();
         state.isPlaying=true;
-        dom.playBtn.textContent='⏸';
+        dom.playBtn.innerHTML=icon('pause');
         dom.playerStatus.textContent=t('playerStatusPlaying');
       }catch(e){
         console.error(e);
@@ -3834,7 +3283,7 @@
     const DL_STATE_ZH={pending:'等待',running:'下载中',done:'完成',partial:'部分完成',failed:'失败'};
     async function refreshDownloads(){
       try{
-        const [tk,fl]=await Promise.all([API.get('/api/tasks'),API.get('/api/files')]);
+        const [tk,fl,lg]=await Promise.all([API.get('/api/tasks'),API.get('/api/files'),API.get('/api/logs')]);
         const tw=$('dl-tasks');
         const rows=[];
         tk.tasks.forEach(task=>task.songs.forEach(s=>{
@@ -3847,9 +3296,17 @@
         fw.innerHTML=fl.files.length?fl.files.map(f=>{
           const q='d='+encodeURIComponent(f.dir)+'&rel='+encodeURIComponent(f.rel);
           return '<div class="dl-item"><span class="dl-name">'+escapeHtml(f.rel)+'</span><span class="dl-sub">'+fmtSize(f.size)+'</span>'
-            +'<a class="btn btn-secondary btn-icon ripple-target" href="/api/file?'+q+'" title="保存到本机">⬇</a>'
-            +'<button class="btn btn-ghost btn-icon ripple-target dl-del" data-q="'+escapeHtml(q)+'" data-name="'+escapeHtml(f.rel)+'" title="删除">×</button></div>';
+            +'<a class="btn btn-secondary btn-icon ripple-target" href="/api/file?'+q+'" title="保存到本机">'+icon('download')+'</a>'
+            +'<button class="btn btn-ghost btn-icon ripple-target dl-del" data-q="'+escapeHtml(q)+'" data-name="'+escapeHtml(f.rel)+'" title="删除">'+icon('trash')+'</button></div>';
         }).join(''):'<div class="dl-empty">下载目录为空</div>';
+        const lw=$('dl-logs');
+        if(lw){
+          const nearBottom=lw.scrollHeight-lw.scrollTop-lw.clientHeight<40;
+          lw.innerHTML=(lg.logs&&lg.logs.length)?lg.logs.slice(-150).map(l=>
+            '<div class="log-line log-'+escapeHtml(l.level)+'"><span class="log-t">'+escapeHtml(l.time)+'</span>'+escapeHtml(l.message)+'</div>'
+          ).join(''):'<div class="dl-empty">暂无日志</div>';
+          if(nearBottom)lw.scrollTop=lw.scrollHeight;
+        }
       }catch(e){ console.warn('downloads',e); }
     }
     function openDownloads(){ $('downloads-modal').classList.add('show'); refreshDownloads(); if(!dlTimer)dlTimer=setInterval(refreshDownloads,2500); }

@@ -1,4 +1,4 @@
-# musicdl WebUI（皮卡丘的音乐站 · 本地版）
+# musicdl WebUI（我的音乐站 · 本地版）
 
 基于 [CharlesPikachu/musicsquare](https://github.com/CharlesPikachu/musicsquare)（Apache-2.0）的界面，
 后端换成本地 [musicdl](https://github.com/CharlesPikachu/musicdl)：
@@ -15,6 +15,9 @@
 | 下载=浏览器直接打开音频链接 | musicdl 后台任务下载：自动写标签、封面、歌词 .lrc，⬇️ 下载管理里看进度/取文件 |
 | 收藏跨会话后播放链接失效 | 后端 `/api/resolve` 按 标题+歌手 自动重新解析 |
 | 无代理/超时/线程等选项 | 代理、请求超时、线程数、curl_cffi 指纹、重试次数等均可配 |
+| 深色霓虹主题 | 明亮清爽浅色主题，SVG 线性图标，桌面三栏 / 手机单列自适应 |
+| 无音质选择 | 结果列表每行显示 格式+大小 徽标（FLAC 标金色），行内直接下载想要的版本 |
+| 无任务/日志界面 | ⬇️ 弹窗：下载任务、文件管理、musicdl 运行日志三合一 |
 
 ## 运行
 
