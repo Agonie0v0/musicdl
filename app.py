@@ -98,6 +98,8 @@ DEFAULT_CONFIG = {
     'proxy_url': '',
     'request_timeout': 30,
     'default_threads': 10,
+    # 下载分类方式：source 按音源 / artist 按歌手 / artist_album 歌手·专辑 / flat 全部平铺
+    'download_layout': 'source',
     'cookies': {},
     'init_music_clients_cfg': {},
     'clients_threadings': {},
@@ -303,6 +305,7 @@ class ConfigBody(BaseModel):
     proxy_url: str = ''
     request_timeout: int = 30
     default_threads: int = 5
+    download_layout: str = 'source'
     cookies: dict = {}
     init_music_clients_cfg: dict = {}
     clients_threadings: dict = {}
@@ -511,6 +514,30 @@ def playlist(body: PlaylistBody):
     return {'results': [serializesong(registersong(song), song) for song in songs]}
 
 
+def _safeseg(name: str, fallback: str) -> str:
+    '''sanitize one path segment (folder name) for the download layout'''
+    seg = re.sub(r'[\\/:*?"<>|]', ' ', str(name or '')).strip().strip('.').strip()
+    return seg[:120] if seg else fallback
+
+
+def applylayout(song):
+    '''set song.work_dir per the configured 下载分类方式 (download_layout)'''
+    layout = manager.config.get('download_layout', 'source')
+    if layout == 'source':
+        return  # keep musicdl's default "<work_dir>/<Source>/" folder
+    base = manager.config['global_client_cfg'].get('work_dir') or 'musicdl_outputs'
+    if layout == 'flat':
+        segs = []
+    elif layout == 'artist':
+        segs = [_safeseg(song.singers, '未知歌手')]
+    elif layout == 'artist_album':
+        segs = [_safeseg(song.singers, '未知歌手'), _safeseg(song.album, '未知专辑')]
+    else:
+        return
+    song.work_dir = os.path.join(base, *segs)
+    song._save_path = None  # force save_path to recompute from the new work_dir
+
+
 def runtask(task_id: str):
     task = TASKS[task_id]
     task['status'] = 'running'
@@ -524,6 +551,10 @@ def runtask(task_id: str):
             e['status'], e['detail'] = 'failed', '对应音源已被禁用'
         else:
             e['status'] = 'running'
+            try:
+                applylayout(e['_song'])
+            except Exception as err:
+                pushlog('warning', f'应用下载分类失败，回退默认: {err}')
     try:
         done = client.download([e['_song'] for e in valid])
         # musicdl deep-copies SongInfo objects while downloading, so match by identity fields
