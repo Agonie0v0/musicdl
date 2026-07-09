@@ -1,0 +1,3 @@
+musicdl
+fastapi
+uvicorn[standard]

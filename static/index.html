@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>musicdl · 音乐下载台</title>
+<style>
+:root {
+  --bg: #0d0c0a;
+  --bg-raise: #151310;
+  --bg-panel: #1a1712;
+  --line: #2c2820;
+  --line-soft: #221f18;
+  --amber: #ffb02e;
+  --amber-dim: #b57b1a;
+  --amber-glow: rgba(255, 176, 46, .14);
+  --green: #7dd87d;
+  --red: #ff6b5e;
+  --blue: #6fb8ff;
+  --text: #e8e2d4;
+  --text-dim: #9a927e;
+  --text-faint: #5d5749;
+  --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  --disp: Bahnschrift, "DIN Alternate", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { color-scheme: dark; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--disp);
+  font-size: 14px;
+  min-height: 100vh;
+  background-image:
+    radial-gradient(ellipse 900px 400px at 70% -10%, rgba(255, 176, 46, .05), transparent),
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.006) 2px 4px);
+}
+::selection { background: var(--amber); color: #131108; }
+
+/* ---------- header ---------- */
+header {
+  display: flex; align-items: center; gap: 18px;
+  padding: 18px 28px 0;
+  max-width: 1180px; margin: 0 auto;
+}
+.wordmark { display: flex; align-items: baseline; gap: 10px; user-select: none; }
+.wordmark .logo {
+  font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: -1px;
+  color: var(--amber); text-shadow: 0 0 24px var(--amber-glow);
+}
+.wordmark .logo::before { content: "▮▯▮ "; font-size: 15px; letter-spacing: 2px; color: var(--amber-dim); }
+.wordmark .ver { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.head-status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2.4s ease-in-out infinite; }
+.dot.err { background: var(--red); box-shadow: 0 0 8px var(--red); }
+@keyframes pulse { 50% { opacity: .45; } }
+
+/* ---------- tabs ---------- */
+nav {
+  display: flex; gap: 4px; padding: 16px 28px 0;
+  max-width: 1180px; margin: 0 auto;
+  border-bottom: 1px solid var(--line);
+}
+nav button {
+  appearance: none; border: 1px solid var(--line); border-bottom: none;
+  background: var(--bg-raise); color: var(--text-dim);
+  font-family: var(--disp); font-size: 13px; letter-spacing: 3px;
+  padding: 9px 22px 8px; cursor: pointer;
+  border-radius: 6px 6px 0 0; position: relative; top: 1px;
+  transition: color .15s, background .15s;
+}
+nav button:hover { color: var(--text); }
+nav button.active {
+  background: var(--bg-panel); color: var(--amber); border-color: var(--line);
+  border-bottom: 1px solid var(--bg-panel);
+}
+nav button.active::before {
+  content: ""; position: absolute; top: -1px; left: 10%; right: 10%; height: 2px;
+  background: var(--amber); box-shadow: 0 0 10px var(--amber);
+}
+nav button .badge {
+  font-family: var(--mono); font-size: 10px; margin-left: 6px;
+  color: var(--amber); letter-spacing: 0;
+}
+
+main { max-width: 1180px; margin: 0 auto; padding: 22px 28px 80px; }
+.tabpane { display: none; animation: fadein .18s ease-out; }
+.tabpane.active { display: block; }
+@keyframes fadein { from { opacity: 0; transform: translateY(4px); } }
+
+/* ---------- common ---------- */
+.panel { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+.label {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 2.5px;
+  color: var(--text-faint); text-transform: uppercase; margin-bottom: 8px;
+}
+button.btn {
+  appearance: none; cursor: pointer;
+  font-family: var(--disp); font-size: 13px; letter-spacing: 1.5px;
+  background: var(--bg-raise); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 18px; transition: border-color .15s, color .15s, box-shadow .15s;
+}
+button.btn:hover { border-color: var(--amber-dim); color: var(--amber); }
+button.btn:disabled { opacity: .4; cursor: not-allowed; }
+button.btn.primary {
+  background: linear-gradient(180deg, #ffc35c, var(--amber));
+  color: #1c1608; border-color: var(--amber); font-weight: 700;
+}
+button.btn.primary:hover { box-shadow: 0 0 18px var(--amber-glow), 0 0 4px var(--amber-glow); color: #1c1608; }
+button.btn.danger:hover { border-color: var(--red); color: var(--red); }
+button.btn.sm { padding: 4px 10px; font-size: 12px; }
+input[type=text], input[type=number], select, textarea {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px;
+  font-family: var(--mono); font-size: 13px;
+  padding: 8px 12px; outline: none; transition: border-color .15s, box-shadow .15s;
+}
+input:focus, textarea:focus { border-color: var(--amber-dim); box-shadow: 0 0 0 2px var(--amber-glow); }
+textarea { width: 100%; min-height: 96px; resize: vertical; line-height: 1.5; }
+textarea.jsonbad { border-color: var(--red); }
+
+/* ---------- search ---------- */
+.searchbar { display: flex; gap: 10px; margin-bottom: 18px; }
+.searchbar select { width: 110px; }
+.searchbar input { flex: 1; font-size: 15px; padding: 11px 16px; }
+.searchbar .btn { padding: 0 30px; font-size: 14px; }
+
+table.list { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.list th {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--text-faint); text-align: left; font-weight: 400;
+  padding: 6px 10px; border-bottom: 1px solid var(--line);
+}
+table.list td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+table.list tr:hover td { background: rgba(255, 176, 46, .03); }
+table.list td.num { font-family: var(--mono); color: var(--text-dim); font-size: 12px; }
+.songname { color: var(--text); }
+.dim { color: var(--text-dim); }
+.tag {
+  display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
+  padding: 2px 7px; border-radius: 4px; border: 1px solid var(--line);
+  color: var(--text-dim); background: var(--bg-raise); text-transform: uppercase;
+}
+.tag.src { color: var(--blue); border-color: rgba(111, 184, 255, .25); }
+.tag.lossless { color: var(--amber); border-color: var(--amber-dim); background: rgba(255, 176, 46, .08); }
+.tag.eps { color: var(--green); border-color: rgba(125, 216, 125, .3); cursor: pointer; }
+input[type=checkbox] {
+  appearance: none; width: 15px; height: 15px; border: 1px solid var(--line);
+  border-radius: 3px; background: var(--bg); cursor: pointer; vertical-align: -3px;
+  position: relative; transition: background .1s, border-color .1s;
+}
+input[type=checkbox]:checked { background: var(--amber); border-color: var(--amber); }
+input[type=checkbox]:checked::after {
+  content: "✓"; position: absolute; inset: 0; color: #1c1608;
+  font-size: 11px; font-weight: 700; display: grid; place-items: center;
+}
+.selectionbar {
+  position: sticky; bottom: 14px; margin-top: 16px;
+  display: none; align-items: center; gap: 14px;
+  background: var(--bg-raise); border: 1px solid var(--amber-dim); border-radius: 8px;
+  padding: 10px 16px; box-shadow: 0 8px 30px rgba(0,0,0,.5), 0 0 20px var(--amber-glow);
+}
+.selectionbar.show { display: flex; }
+.selectionbar .count { font-family: var(--mono); color: var(--amber); font-size: 13px; }
+.empty { color: var(--text-faint); font-family: var(--mono); font-size: 12px; text-align: center; padding: 44px 0; letter-spacing: 2px; }
+.spin {
+  display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--amber);
+  animation: rot .7s linear infinite; vertical-align: -2px;
+}
+@keyframes rot { to { transform: rotate(360deg); } }
+
+/* ---------- tasks ---------- */
+.taskcard { margin-bottom: 14px; }
+.taskhead { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.taskhead .tid { font-family: var(--mono); font-size: 12px; color: var(--text-faint); }
+.state {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 4px; border: 1px solid;
+}
+.state.pending { color: var(--text-dim); border-color: var(--line); }
+.state.running { color: var(--amber); border-color: var(--amber-dim); animation: pulse 1.6s infinite; }
+.state.done { color: var(--green); border-color: rgba(125,216,125,.4); }
+.state.partial { color: var(--amber); border-color: var(--amber-dim); }
+.state.failed { color: var(--red); border-color: rgba(255,107,94,.4); }
+
+/* ---------- settings ---------- */
+.setgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.setgrid .panel.wide { grid-column: 1 / -1; }
+.srccat { margin-bottom: 14px; }
+.srccat:last-child { margin-bottom: 0; }
+.srccat .cathead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.srccat .cathead .label { margin: 0; color: var(--amber-dim); }
+.srcgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; }
+.srcgrid label {
+  display: flex; align-items: center; gap: 7px; padding: 4px 6px;
+  font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+  border-radius: 4px; cursor: pointer; transition: color .1s;
+}
+.srcgrid label:hover { color: var(--text); background: rgba(255,255,255,.02); }
+.srcgrid label.on { color: var(--text); }
+.formrow { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.formrow label.fname { width: 190px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); flex-shrink: 0; }
+.formrow input[type=text] { flex: 1; }
+.formrow input[type=number] { width: 90px; }
+.switchrow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; }
+.switchrow label { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); padding: 4px 0; cursor: pointer; }
+.hint { font-family: var(--mono); font-size: 11px; color: var(--text-faint); line-height: 1.6; margin-top: 6px; }
+.hint code { color: var(--amber-dim); }
+.savebar { margin-top: 16px; display: flex; align-items: center; gap: 14px; }
+
+/* ---------- logs ---------- */
+.logbox {
+  font-family: var(--mono); font-size: 12px; line-height: 1.7;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 14px 16px; height: 520px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+}
+.logline .lt { color: var(--text-faint); }
+.logline.info { color: var(--text-dim); }
+.logline.debug { color: var(--text-faint); }
+.logline.warning { color: var(--amber); }
+.logline.error { color: var(--red); }
+
+/* ---------- toast ---------- */
+#toasts { position: fixed; right: 20px; top: 20px; z-index: 99; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  background: var(--bg-raise); border: 1px solid var(--line); border-left: 3px solid var(--amber);
+  color: var(--text); font-family: var(--mono); font-size: 12px;
+  padding: 10px 16px; border-radius: 6px; max-width: 380px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5); animation: slidein .2s ease-out;
+}
+.toast.err { border-left-color: var(--red); color: var(--red); }
+.toast.ok { border-left-color: var(--green); }
+@keyframes slidein { from { transform: translateX(30px); opacity: 0; } }
+
+@media (max-width: 860px) {
+  .setgrid { grid-template-columns: 1fr; }
+  main, header, nav { padding-left: 14px; padding-right: 14px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wordmark">
+    <span class="logo">musicdl</span>
+    <span class="ver" id="ver">v-</span>
+  </div>
+  <div class="head-status"><span class="dot" id="statusdot"></span><span id="statustext">READY</span></div>
+</header>
+
+<nav id="tabs">
+  <button data-tab="search" class="active">搜 索</button>
+  <button data-tab="tasks">任 务<span class="badge" id="taskbadge"></span></button>
+  <button data-tab="files">文 件</button>
+  <button data-tab="settings">设 置</button>
+  <button data-tab="logs">日 志</button>
+</nav>
+
+<main>
+
+<!-- ============ 搜索 ============ -->
+<section class="tabpane active" id="pane-search">
+  <div class="searchbar">
+    <select id="searchmode">
+      <option value="keyword">关键词</option>
+      <option value="playlist">歌单链接</option>
+    </select>
+    <input type="text" id="searchinput" placeholder="输入歌名 / 歌手，回车搜索…" autocomplete="off">
+    <button class="btn primary" id="searchbtn">搜索</button>
+  </div>
+  <div class="panel">
+    <div id="results"><div class="empty">— 输入关键词开始搜索 —</div></div>
+  </div>
+  <div class="selectionbar" id="selectionbar">
+    <span class="count"><span id="selcount">0</span> 首已选</span>
+    <button class="btn sm" id="selall">全选</button>
+    <button class="btn sm" id="selinv">反选</button>
+    <span style="flex:1"></span>
+    <button class="btn primary" id="dlbtn">↓ 下载选中</button>
+  </div>
+</section>
+
+<!-- ============ 任务 ============ -->
+<section class="tabpane" id="pane-tasks">
+  <div id="tasklist"><div class="empty">— 暂无下载任务 —</div></div>
+</section>
+
+<!-- ============ 文件 ============ -->
+<section class="tabpane" id="pane-files">
+  <div class="panel">
+    <div style="display:flex;align-items:center;margin-bottom:10px">
+      <div class="label" style="margin:0">已下载文件</div>
+      <span style="flex:1"></span>
+      <button class="btn sm" id="refreshfiles">刷新</button>
+    </div>
+    <div id="filelist"><div class="empty">— 加载中 —</div></div>
+  </div>
+</section>
+
+<!-- ============ 设置 ============ -->
+<section class="tabpane" id="pane-settings">
+  <div class="setgrid">
+    <div class="panel wide">
+      <div style="display:flex;align-items:center;margin-bottom:14px">
+        <div class="label" style="margin:0">音源选择</div>
+        <span style="flex:1"></span>
+        <button class="btn sm" id="srcdefault">恢复默认</button>
+        <button class="btn sm" id="srcall" style="margin-left:6px">全选</button>
+        <button class="btn sm" id="srcnone" style="margin-left:6px">清空</button>
+      </div>
+      <div id="sourcecats"></div>
+    </div>
+
+    <div class="panel">
+      <div class="label">基础设置（应用于所有音源）</div>
+      <div class="formrow"><label class="fname">下载目录 work_dir</label><input type="text" id="cfg-work_dir"></div>
+      <div class="formrow"><label class="fname">每源搜索数 search_size_per_source</label><input type="number" id="cfg-search_size_per_source" min="1" max="50"></div>
+      <div class="formrow"><label class="fname">每页大小 search_size_per_page</label><input type="number" id="cfg-search_size_per_page" min="1" max="100"></div>
+      <div class="formrow"><label class="fname">最大重试 max_retries</label><input type="number" id="cfg-max_retries" min="0" max="10"></div>
+      <div class="formrow"><label class="fname">默认线程数 default_threads</label><input type="number" id="cfg-default_threads" min="1" max="32"></div>
+      <div class="formrow"><label class="fname">请求超时秒 request_timeout</label><input type="number" id="cfg-request_timeout" min="0" max="300"></div>
+      <div class="formrow"><label class="fname">HTTP 代理 proxy_url</label><input type="text" id="cfg-proxy_url" placeholder="http://127.0.0.1:7890（留空不用）"></div>
+    </div>
+
+    <div class="panel">
+      <div class="label">开关</div>
+      <div class="switchrow">
+        <label><input type="checkbox" id="cfg-auto_set_proxies"> auto_set_proxies 自动代理</label>
+        <label><input type="checkbox" id="cfg-random_update_ua"> random_update_ua 随机 UA</label>
+        <label><input type="checkbox" id="cfg-maintain_session"> maintain_session 保持会话</label>
+        <label><input type="checkbox" id="cfg-strict_limit_search_size_per_page"> strict_limit 严格分页</label>
+        <label><input type="checkbox" id="cfg-enable_search_curl_cffi"> 搜索用 curl_cffi</label>
+        <label><input type="checkbox" id="cfg-enable_parse_curl_cffi"> 解析用 curl_cffi</label>
+        <label><input type="checkbox" id="cfg-enable_download_curl_cffi"> 下载用 curl_cffi</label>
+      </div>
+      <div class="hint">curl_cffi 用于模拟浏览器指纹，部分风控严格的音源需要开启。</div>
+    </div>
+
+    <div class="panel wide">
+      <div class="label">高级 · 按音源覆盖（JSON，键为音源名，如 <span style="color:var(--amber-dim)">"NeteaseMusicClient"</span>）</div>
+      <div class="setgrid" style="margin-top:10px">
+        <div>
+          <div class="label">init_music_clients_cfg 客户端配置覆盖</div>
+          <textarea id="cfg-init_music_clients_cfg" spellcheck="false"></textarea>
+          <div class="hint">例：<code>{"NeteaseMusicClient": {"work_dir": "netease_out", "search_size_per_source": 10, "default_search_cookies": {"MUSIC_U": "..."}}}</code></div>
+        </div>
+        <div>
+          <div class="label">clients_threadings 线程数覆盖</div>
+          <textarea id="cfg-clients_threadings" spellcheck="false"></textarea>
+          <div class="hint">例：<code>{"QQMusicClient": 8, "GDStudioMusicClient": 10}</code></div>
+        </div>
+        <div>
+          <div class="label">requests_overrides 请求参数覆盖</div>
+          <textarea id="cfg-requests_overrides" spellcheck="false"></textarea>
+          <div class="hint">例：<code>{"YouTubeMusicClient": {"proxies": {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}}}</code></div>
+        </div>
+        <div>
+          <div class="label">search_rules 搜索规则</div>
+          <textarea id="cfg-search_rules" spellcheck="false"></textarea>
+          <div class="hint">例：<code>{"NeteaseMusicClient": {"ext": "flac"}}</code></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="savebar">
+    <button class="btn primary" id="savebtn">保存并应用</button>
+    <span class="hint" id="savehint">保存后立即重建音源客户端并写入 config.json</span>
+  </div>
+</section>
+
+<!-- ============ 日志 ============ -->
+<section class="tabpane" id="pane-logs">
+  <div style="display:flex;align-items:center;margin-bottom:10px">
+    <div class="label" style="margin:0">运行日志</div>
+    <span style="flex:1"></span>
+    <label style="font-family:var(--mono);font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:6px;margin-right:12px">
+      <input type="checkbox" id="logfollow" checked> 自动滚动
+    </label>
+    <button class="btn sm" id="clearlogs">清空</button>
+  </div>
+  <div class="logbox" id="logbox"></div>
+</section>
+
+</main>
+<div id="toasts"></div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function toast(msg, kind='') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.textContent = msg;
+  $('#toasts').appendChild(el);
+  setTimeout(() => el.remove(), 4200);
+}
+
+async function api(path, opts={}) {
+  const res = await fetch(path, opts.body !== undefined
+    ? {method: opts.method || 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(opts.body)}
+    : {method: opts.method || 'GET'});
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+/* ---------- tabs ---------- */
+$('#tabs').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  $$('#tabs button').forEach(b => b.classList.toggle('active', b === btn));
+  $$('.tabpane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + btn.dataset.tab));
+  if (btn.dataset.tab === 'files') loadFiles();
+});
+
+function setStatus(text, err=false) {
+  $('#statustext').textContent = text;
+  $('#statusdot').classList.toggle('err', err);
+}
+
+/* ---------- search ---------- */
+let searching = false;
+const songRow = s => `
+  <tr data-id="${s.id}">
+    <td><input type="checkbox" class="pick" data-id="${s.id}"></td>
+    <td class="songname">${esc(s.song_name)}${s.episodes ? ` <span class="tag eps" data-id="${s.id}">${s.episodes} 集 ▾</span>` : ''}</td>
+    <td class="dim">${esc(s.singers)}</td>
+    <td class="dim">${esc(s.album)}</td>
+    <td class="num">${esc(s.file_size)}</td>
+    <td class="num">${esc(s.duration)}</td>
+    <td>${s.ext ? `<span class="tag ${s.lossless ? 'lossless' : ''}">${esc(s.ext)}</span>` : ''}</td>
+    <td><span class="tag src">${esc(s.source)}${s.root_source ? '·' + esc(s.root_source) : ''}</span></td>
+  </tr>`;
+
+function renderResults(list) {
+  if (!list.length) { $('#results').innerHTML = '<div class="empty">— 没有搜索到结果 —</div>'; updateSel(); return; }
+  $('#results').innerHTML = `
+    <table class="list">
+      <thead><tr><th style="width:34px"></th><th>歌曲</th><th>歌手</th><th>专辑</th><th>大小</th><th>时长</th><th>格式</th><th>来源</th></tr></thead>
+      <tbody>${list.map(songRow).join('')}</tbody>
+    </table>`;
+  updateSel();
+}
+
+async function doSearch() {
+  if (searching) return;
+  const q = $('#searchinput').value.trim();
+  if (!q) return;
+  searching = true;
+  $('#searchbtn').disabled = true;
+  setStatus('SEARCHING…');
+  const mode = $('#searchmode').value;
+  $('#results').innerHTML = `<div class="empty"><span class="spin"></span>&nbsp; ${mode === 'playlist' ? '解析歌单中' : '正在从各音源搜索'}，请稍候…</div>`;
+  try {
+    const data = mode === 'playlist'
+      ? await api('/api/playlist', {body: {url: q}})
+      : await api('/api/search', {body: {keyword: q}});
+    renderResults(data.results);
+    setStatus('READY');
+  } catch (err) {
+    $('#results').innerHTML = `<div class="empty">— 搜索失败：${esc(err.message)} —</div>`;
+    setStatus('ERROR', true);
+    toast(err.message, 'err');
+  } finally {
+    searching = false;
+    $('#searchbtn').disabled = false;
+  }
+}
+$('#searchbtn').addEventListener('click', doSearch);
+$('#searchinput').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+$('#searchmode').addEventListener('change', () => {
+  $('#searchinput').placeholder = $('#searchmode').value === 'playlist'
+    ? '粘贴歌单链接，如 https://music.163.com/#/playlist?id=…' : '输入歌名 / 歌手，回车搜索…';
+});
+
+function updateSel() {
+  const n = $$('.pick:checked').length;
+  $('#selcount').textContent = n;
+  $('#selectionbar').classList.toggle('show', $$('.pick').length > 0);
+  $('#dlbtn').disabled = n === 0;
+}
+$('#results').addEventListener('change', e => { if (e.target.classList.contains('pick')) updateSel(); });
+$('#results').addEventListener('click', async e => {
+  const eps = e.target.closest('.tag.eps'); if (!eps) return;
+  const tr = eps.closest('tr');
+  if (tr.dataset.expanded) return;
+  tr.dataset.expanded = '1';
+  eps.textContent = '加载中…';
+  try {
+    const data = await api(`/api/song/${eps.dataset.id}/episodes`);
+    eps.remove();
+    tr.insertAdjacentHTML('afterend', data.results.map(songRow).join(''));
+    updateSel();
+  } catch (err) { toast(err.message, 'err'); }
+});
+$('#selall').addEventListener('click', () => { $$('.pick').forEach(c => c.checked = true); updateSel(); });
+$('#selinv').addEventListener('click', () => { $$('.pick').forEach(c => c.checked = !c.checked); updateSel(); });
+$('#dlbtn').addEventListener('click', async () => {
+  const ids = $$('.pick:checked').map(c => c.dataset.id);
+  if (!ids.length) return;
+  try {
+    await api('/api/download', {body: {ids}});
+    toast(`已创建下载任务（${ids.length} 首）`, 'ok');
+    $$('.pick:checked').forEach(c => c.checked = false); updateSel();
+    pollTasks();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+/* ---------- tasks ---------- */
+const stateNames = {pending: '等待', running: '下载中', done: '完成', partial: '部分完成', failed: '失败'};
+function renderTasks(tasks) {
+  const running = tasks.filter(t => t.status === 'running' || t.status === 'pending').length;
+  $('#taskbadge').textContent = running ? running : '';
+  if (!tasks.length) { $('#tasklist').innerHTML = '<div class="empty">— 暂无下载任务 —</div>'; return; }
+  $('#tasklist').innerHTML = tasks.map(t => `
+    <div class="panel taskcard">
+      <div class="taskhead">
+        <span class="state ${t.status}">${stateNames[t.status] || t.status}</span>
+        <span class="tid">#${t.id}</span>
+        <span class="tid">${t.created_at}${t.finished_at ? ' → ' + t.finished_at : ''}</span>
+        <span class="tid" style="margin-left:auto">${t.songs.length} 首</span>
+      </div>
+      <table class="list"><tbody>
+        ${t.songs.map(s => `
+          <tr>
+            <td style="width:80px"><span class="state ${s.status}">${stateNames[s.status] || s.status}</span></td>
+            <td class="songname">${esc(s.song_name)}</td>
+            <td class="dim">${esc(s.singers)}</td>
+            <td><span class="tag src">${esc(s.source)}</span></td>
+            <td class="dim" style="font-family:var(--mono);font-size:11px">${esc(s.detail || '')}</td>
+          </tr>`).join('')}
+      </tbody></table>
+    </div>`).join('');
+}
+async function pollTasks() {
+  try { renderTasks((await api('/api/tasks')).tasks); } catch {}
+}
+
+/* ---------- files ---------- */
+const fmtSize = n => n > 1048576 ? (n/1048576).toFixed(1) + ' MB' : (n/1024).toFixed(0) + ' KB';
+async function loadFiles() {
+  try {
+    const data = await api('/api/files');
+    if (!data.files.length) { $('#filelist').innerHTML = '<div class="empty">— 下载目录为空 —</div>'; return; }
+    $('#filelist').innerHTML = `
+      <table class="list">
+        <thead><tr><th>文件名</th><th>大小</th><th>修改时间</th><th style="width:130px">操作</th></tr></thead>
+        <tbody>${data.files.map(f => `
+          <tr>
+            <td class="songname">${esc(f.rel)}</td>
+            <td class="num">${fmtSize(f.size)}</td>
+            <td class="num">${esc(f.mtime)}</td>
+            <td>
+              <a href="/api/file?d=${encodeURIComponent(f.dir)}&rel=${encodeURIComponent(f.rel)}"><button class="btn sm">下载</button></a>
+              <button class="btn sm danger delfile" data-d="${esc(f.dir)}" data-rel="${esc(f.rel)}">删除</button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (err) { $('#filelist').innerHTML = `<div class="empty">— ${esc(err.message)} —</div>`; }
+}
+$('#refreshfiles').addEventListener('click', loadFiles);
+$('#filelist').addEventListener('click', async e => {
+  const btn = e.target.closest('.delfile'); if (!btn) return;
+  if (!confirm(`确认删除 ${btn.dataset.rel}？`)) return;
+  try {
+    await api(`/api/file?d=${encodeURIComponent(btn.dataset.d)}&rel=${encodeURIComponent(btn.dataset.rel)}`, {method: 'DELETE'});
+    toast('已删除', 'ok'); loadFiles();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+/* ---------- settings ---------- */
+let META = null;
+const BOOL_KEYS = ['auto_set_proxies','random_update_ua','maintain_session','strict_limit_search_size_per_page','enable_search_curl_cffi','enable_parse_curl_cffi','enable_download_curl_cffi'];
+const NUM_KEYS = ['search_size_per_source','search_size_per_page','max_retries'];
+const JSON_KEYS = ['init_music_clients_cfg','clients_threadings','requests_overrides','search_rules'];
+
+function renderSources(categories, selected) {
+  $('#sourcecats').innerHTML = Object.entries(categories).map(([cat, names]) => `
+    <div class="srccat">
+      <div class="cathead"><div class="label">${esc(cat)}</div></div>
+      <div class="srcgrid">
+        ${names.map(n => `
+          <label class="${selected.includes(n) ? 'on' : ''}">
+            <input type="checkbox" class="srcpick" value="${esc(n)}" ${selected.includes(n) ? 'checked' : ''}>
+            ${esc(n.replace(/MusicClient$/, ''))}
+          </label>`).join('')}
+      </div>
+    </div>`).join('');
+}
+$('#sourcecats').addEventListener('change', e => {
+  if (e.target.classList.contains('srcpick')) e.target.closest('label').classList.toggle('on', e.target.checked);
+});
+$('#srcall').addEventListener('click', () => $$('.srcpick').forEach(c => { c.checked = true; c.closest('label').classList.add('on'); }));
+$('#srcnone').addEventListener('click', () => $$('.srcpick').forEach(c => { c.checked = false; c.closest('label').classList.remove('on'); }));
+$('#srcdefault').addEventListener('click', () => $$('.srcpick').forEach(c => {
+  c.checked = META.default_sources.includes(c.value);
+  c.closest('label').classList.toggle('on', c.checked);
+}));
+
+function fillSettings(cfg) {
+  const g = cfg.global_client_cfg;
+  $('#cfg-work_dir').value = g.work_dir ?? 'musicdl_outputs';
+  NUM_KEYS.forEach(k => $('#cfg-' + k).value = g[k] ?? '');
+  BOOL_KEYS.forEach(k => $('#cfg-' + k).checked = !!g[k]);
+  $('#cfg-default_threads').value = cfg.default_threads ?? 5;
+  $('#cfg-request_timeout').value = cfg.request_timeout ?? 30;
+  $('#cfg-proxy_url').value = cfg.proxy_url ?? '';
+  JSON_KEYS.forEach(k => $('#cfg-' + k).value = JSON.stringify(cfg[k] || {}, null, 2));
+  if (META) renderSources(META.categories, cfg.music_sources);
+}
+
+function collectSettings() {
+  const jsons = {};
+  for (const k of JSON_KEYS) {
+    const el = $('#cfg-' + k);
+    try {
+      jsons[k] = el.value.trim() ? JSON.parse(el.value) : {};
+      el.classList.remove('jsonbad');
+    } catch {
+      el.classList.add('jsonbad');
+      throw new Error(`「${k}」不是合法 JSON`);
+    }
+  }
+  const g = {work_dir: $('#cfg-work_dir').value.trim() || 'musicdl_outputs'};
+  NUM_KEYS.forEach(k => g[k] = parseInt($('#cfg-' + k).value) || 0);
+  BOOL_KEYS.forEach(k => g[k] = $('#cfg-' + k).checked);
+  return {
+    music_sources: $$('.srcpick:checked').map(c => c.value),
+    global_client_cfg: g,
+    proxy_url: $('#cfg-proxy_url').value.trim(),
+    request_timeout: parseInt($('#cfg-request_timeout').value) || 0,
+    default_threads: parseInt($('#cfg-default_threads').value) || 5,
+    ...jsons,
+  };
+}
+
+$('#savebtn').addEventListener('click', async () => {
+  let cfg;
+  try { cfg = collectSettings(); } catch (err) { toast(err.message, 'err'); return; }
+  if (!cfg.music_sources.length) { toast('至少启用一个音源', 'err'); return; }
+  $('#savebtn').disabled = true;
+  $('#savehint').textContent = '正在应用配置…';
+  try {
+    await api('/api/config', {method: 'PUT', body: cfg});
+    toast('配置已保存并生效', 'ok');
+    $('#savehint').textContent = `已保存 · ${cfg.music_sources.length} 个音源已启用`;
+  } catch (err) {
+    toast(err.message, 'err');
+    $('#savehint').textContent = '保存失败：' + err.message;
+  } finally {
+    $('#savebtn').disabled = false;
+  }
+});
+
+/* ---------- logs ---------- */
+async function pollLogs() {
+  try {
+    const data = await api('/api/logs');
+    const box = $('#logbox');
+    box.innerHTML = data.logs.map(l =>
+      `<div class="logline ${esc(l.level)}"><span class="lt">${esc(l.time)}</span> ${esc(l.message)}</div>`).join('');
+    if ($('#logfollow').checked) box.scrollTop = box.scrollHeight;
+  } catch {}
+}
+$('#clearlogs').addEventListener('click', async () => { await api('/api/logs/clear', {body: {}}); pollLogs(); });
+
+/* ---------- init ---------- */
+(async function init() {
+  try {
+    const [meta, cfg] = await Promise.all([api('/api/meta'), api('/api/config')]);
+    META = meta;
+    $('#ver').textContent = 'v' + meta.version;
+    fillSettings(cfg);
+  } catch (err) {
+    setStatus('ERROR', true);
+    toast('初始化失败: ' + err.message, 'err');
+  }
+  pollTasks(); pollLogs();
+  setInterval(pollTasks, 2500);
+  setInterval(pollLogs, 3000);
+})();
+</script>
+</body>
+</html>

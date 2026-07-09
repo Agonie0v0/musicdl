@@ -1,0 +1,4 @@
+venv/
+musicdl_outputs/
+config.json
+__pycache__/
