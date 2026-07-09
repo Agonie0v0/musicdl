@@ -38,12 +38,29 @@ _RichProgress.__init__ = _quiet_progress_init
 
 from musicdl.musicdl import MusicClient, DEFAULT_MUSIC_SOURCES
 from musicdl.modules import MusicClientBuilder, LoggerHandle
+from musicdl.modules.sources.base import BaseMusicClient
 from musicdl import __version__ as MUSICDL_VERSION
 
 BASE_DIR = Path(__file__).resolve().parent
 # musicdl resolves relative work_dirs against the process cwd — pin it to the project dir
 os.chdir(BASE_DIR)
-CONFIG_PATH = BASE_DIR / 'config.json'
+
+IS_WINDOWS = os.name == 'nt'
+
+# --- keep the download dir clean (navidrome-friendly) ------------------------
+# By default musicdl (1) writes a search_results.pkl / download_results.pkl next
+# to every result and (2) buries files in a per-search "<timestamp> <keyword>/"
+# subfolder. We never read those .pkl files, and the timestamp folders pile up
+# empty on every search. Neuter both so downloads land flat in
+# "<work_dir>/<Source>/<song>.<ext>" — tidy, and mountable straight into a
+# navidrome / Jellyfin library.
+BaseMusicClient._savetopkl = lambda self, *a, **k: None
+_orig_constructworkdir = BaseMusicClient._constructuniqueworkdir
+def _flat_workdir(self, keyword, sort_by_search_kwd_and_time=True):
+    return _orig_constructworkdir(self, keyword, sort_by_search_kwd_and_time=False)
+BaseMusicClient._constructuniqueworkdir = _flat_workdir
+# MUSICDL_CONFIG lets Docker/NAS persist settings on a mounted volume
+CONFIG_PATH = Path(os.environ.get('MUSICDL_CONFIG', BASE_DIR / 'config.json'))
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
 SOURCE_CATEGORIES = {
@@ -64,7 +81,9 @@ SOURCE_CATEGORIES = {
 DEFAULT_CONFIG = {
     'music_sources': list(DEFAULT_MUSIC_SOURCES),
     'global_client_cfg': {
-        'work_dir': 'musicdl_outputs',
+        # MUSICDL_WORKDIR lets Docker/NAS deployments point straight at a
+        # navidrome/Jellyfin music library without editing config.json
+        'work_dir': os.environ.get('MUSICDL_WORKDIR', 'musicdl_outputs'),
         'search_size_per_source': 5,
         'search_size_per_page': 10,
         'strict_limit_search_size_per_page': True,
@@ -303,7 +322,8 @@ def meta():
     leftovers = [s for s in registered if not any(s in names for names in SOURCE_CATEGORIES.values())]
     if leftovers:
         categorized['其他'] = leftovers
-    return {'version': MUSICDL_VERSION, 'categories': categorized, 'default_sources': list(DEFAULT_MUSIC_SOURCES)}
+    return {'version': MUSICDL_VERSION, 'categories': categorized, 'default_sources': list(DEFAULT_MUSIC_SOURCES),
+            'platform': sys.platform, 'is_windows': IS_WINDOWS}
 
 
 @app.get('/api/config')
@@ -565,15 +585,46 @@ def clearfinishedtasks():
 
 @app.post('/api/open-dir')
 def opendir():
-    '''open the main download dir in Explorer (local deployments only)'''
+    '''open the main download dir in the OS file manager (local desktop only)'''
     main = Path(manager.config['global_client_cfg'].get('work_dir') or 'musicdl_outputs')
     main = (main if main.is_absolute() else BASE_DIR / main).resolve()
     main.mkdir(parents=True, exist_ok=True)
+    if not IS_WINDOWS:
+        # headless / NAS / Docker deployments have no desktop to open
+        raise HTTPException(400, f'服务端非本机桌面环境，下载目录为：{main}')
     try:
         os.startfile(str(main))
     except Exception as err:
         raise HTTPException(500, f'无法打开目录: {err}')
     return {'ok': True, 'dir': str(main)}
+
+
+@app.post('/api/cache/clear')
+def clearcache():
+    '''remove musicdl cache clutter: stray *.pkl files and empty result folders,
+    keeping every real audio file. Safe to run anytime.'''
+    removed_files, freed = 0, 0
+    for workdir in manager.workdirs():
+        if not workdir.is_dir():
+            continue
+        for path in workdir.rglob('*.pkl'):
+            if path.is_file():
+                try:
+                    freed += path.stat().st_size
+                    path.unlink()
+                    removed_files += 1
+                except Exception:
+                    pass
+        # prune now-empty directories (deepest first) — e.g. old timestamp folders
+        for path in sorted((p for p in workdir.rglob('*') if p.is_dir()),
+                           key=lambda p: len(p.parts), reverse=True):
+            try:
+                if not any(path.iterdir()):
+                    path.rmdir()
+            except Exception:
+                pass
+    pushlog('info', f'清理缓存: 删除 {removed_files} 个缓存文件，释放 {freed // 1024} KB')
+    return {'removed': removed_files, 'freed_kb': freed // 1024}
 
 
 @app.get('/api/tasks')
@@ -648,4 +699,7 @@ app.mount('/static', StaticFiles(directory=BASE_DIR / 'static'), name='static')
 
 if __name__ == '__main__':
     import uvicorn
-    uvicorn.run(app, host='127.0.0.1', port=8765)
+    # 0.0.0.0 + env overrides so the same image runs in Docker / on a NAS
+    host = os.environ.get('MUSICDL_HOST', '127.0.0.1')
+    port = int(os.environ.get('MUSICDL_PORT', '8765'))
+    uvicorn.run(app, host=host, port=port)

@@ -1,0 +1,9 @@
+venv/
+musicdl_outputs/
+music/
+data/
+config.json
+__pycache__/
+*.pyc
+.git/
+static/index-v1-backup.html
