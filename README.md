@@ -213,6 +213,31 @@ docker run -d --name musicdl-webui --restart unless-stopped \
 > 提示：上面「基础」「代理作用范围」这些图形化设置已覆盖绝大多数需求，
 > 只有要**对个别音源精细化调参**时才需要动这四个 JSON 框。
 
+## musicdl 引擎升级（音源修复靠它，可独立更新）
+
+各音源能不能用，取决于底层的 **musicdl** 引擎。平台改接口导致某个源失效时，
+是 musicdl 作者更新解析代码来修——所以**升级 musicdl 就能拿到修复，不需要改本项目**。
+
+**为什么升级不会把站搞崩？** 本项目为了做「平铺目录 / 歌词分离 / 日志面板」等增强，
+patch 了一些 musicdl 内部方法。这些 patch 全部做了**兼容保护**：某个内部方法在新版本里
+改名或消失时，只会**自动跳过那一项增强**（顶多少个锦上添花的功能，且会在日志/`/api/health` 标注），
+**核心的搜索 / 播放 / 下载走的是 musicdl 公开接口，不受影响、照常启动**。因此 `requirements.txt`
+里 musicdl 用的是 `>=`，不再钉死版本。
+
+**怎么升级：**
+
+| 场景 | 操作 |
+|---|---|
+| Docker / NAS | `docker compose up -d --build`（重建即拉最新 musicdl） |
+| 本地手动 | `venv\Scripts\pip install -U musicdl`（Linux/mac：`venv/bin/pip install -U musicdl`） |
+| 本地自动 | 设环境变量 `MUSICDL_AUTO_UPDATE=1` 再运行 `start.bat` / `start.sh`，每次启动自动升 |
+| 想回退 | `pip install musicdl==2.13.1`，或把 `requirements.txt` 钉回某版本 |
+
+**怎么查看状态：** 设置弹窗底部「关于 musicdl 引擎」可看当前版本、点「检查新版本」；
+接口层 `GET /api/health` 返回版本 + 各增强补丁是否生效，`GET /api/musicdl/latest` 查 PyPI 最新版。
+
+> 小结：**日常升级 musicdl 尽管升**，坏不了站；只有极少数情况（musicdl 大改公开接口、或某个增强想恢复）才需要找我。
+
 ## 结构
 
 ```

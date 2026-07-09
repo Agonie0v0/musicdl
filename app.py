@@ -28,13 +28,17 @@ from fastapi.responses import FileResponse, RedirectResponse, Response, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# silence rich live progress rendering (musicdl uses it heavily; useless in a server console)
-from rich.progress import Progress as _RichProgress
-_rich_progress_init = _RichProgress.__init__
-def _quiet_progress_init(self, *args, **kwargs):
-    kwargs['disable'] = True
-    _rich_progress_init(self, *args, **kwargs)
-_RichProgress.__init__ = _quiet_progress_init
+# silence rich live progress rendering (musicdl uses it heavily; useless in a
+# server console). Guarded so a rich/musicdl change can't stop the app booting.
+try:
+    from rich.progress import Progress as _RichProgress
+    _rich_progress_init = _RichProgress.__init__
+    def _quiet_progress_init(self, *args, **kwargs):
+        kwargs['disable'] = True
+        _rich_progress_init(self, *args, **kwargs)
+    _RichProgress.__init__ = _quiet_progress_init
+except Exception:
+    pass
 
 from musicdl.musicdl import MusicClient, DEFAULT_MUSIC_SOURCES
 from musicdl.modules import MusicClientBuilder, LoggerHandle
@@ -47,40 +51,73 @@ os.chdir(BASE_DIR)
 
 IS_WINDOWS = os.name == 'nt'
 
-# --- keep the download dir clean (navidrome-friendly) ------------------------
-# By default musicdl (1) writes a search_results.pkl / download_results.pkl next
-# to every result and (2) buries files in a per-search "<timestamp> <keyword>/"
-# subfolder. We never read those .pkl files, and the timestamp folders pile up
-# empty on every search. Neuter both so downloads land flat in
-# "<work_dir>/<Source>/<song>.<ext>" — tidy, and mountable straight into a
-# navidrome / Jellyfin library.
-BaseMusicClient._savetopkl = lambda self, *a, **k: None
-_orig_constructworkdir = BaseMusicClient._constructuniqueworkdir
-def _flat_workdir(self, keyword, sort_by_search_kwd_and_time=True):
-    return _orig_constructworkdir(self, keyword, sort_by_search_kwd_and_time=False)
-BaseMusicClient._constructuniqueworkdir = _flat_workdir
+# --- musicdl internal tweaks (all optional, all crash-proof) -----------------
+# Everything below reaches into musicdl's *private* internals to add niceties
+# (clean download dir, lyrics mode, log capture). Those internals can change
+# between musicdl versions, so each patch is wrapped: if a symbol is gone, we
+# skip just that enhancement and record it — the app still starts and the core
+# (search / play / download, all via musicdl's PUBLIC api) keeps working.
+# This is what lets you upgrade musicdl freely without me re-adapting each time.
+PATCH_STATUS: dict = {}
 
-# --- lyrics mode: separate .lrc file / embedded in the audio / both ----------
-# musicdl always does both (writes <name>.lrc AND embeds a USLT/lyrics tag).
-# Gate each half on config['lyrics_mode']: 'lrc' | 'embed' | 'both' (default both).
-from musicdl.modules.utils.songinfoutils import SongInfoUtils
-_orig_savelrc = SongInfoUtils.savelrctofile
-_orig_embedlyrics = SongInfoUtils.embedlyrics
+
 def _lyrics_mode():
     try:
         return manager.config.get('lyrics_mode', 'both')
     except Exception:
         return 'both'
-def _gated_savelrc(audio_path, lyrics_text, *, overwrite=False):
-    if _lyrics_mode() == 'embed':
-        return False  # 只嵌入，不写单独 .lrc
-    return _orig_savelrc(audio_path, lyrics_text, overwrite=overwrite)
-def _gated_embedlyrics(audio_path, *, overwrite, lyrics_text):
-    if _lyrics_mode() == 'lrc':
-        return False  # 只写单独 .lrc，不嵌入
-    return _orig_embedlyrics(audio_path, overwrite=overwrite, lyrics_text=lyrics_text)
-SongInfoUtils.savelrctofile = staticmethod(_gated_savelrc)
-SongInfoUtils.embedlyrics = staticmethod(_gated_embedlyrics)
+
+
+def apply_musicdl_patches():
+    # 1) stop writing search_results.pkl / download_results.pkl clutter
+    try:
+        if hasattr(BaseMusicClient, '_savetopkl'):
+            BaseMusicClient._savetopkl = lambda self, *a, **k: None
+            PATCH_STATUS['no_pkl'] = 'ok'
+        else:
+            PATCH_STATUS['no_pkl'] = 'skip: _savetopkl missing'
+    except Exception as err:
+        PATCH_STATUS['no_pkl'] = f'skip: {err}'
+
+    # 2) flatten the per-search "<timestamp> <keyword>/" folder so downloads
+    #    land in "<work_dir>/<Source>/<song>.<ext>" (navidrome-friendly)
+    try:
+        _orig_cwd = getattr(BaseMusicClient, '_constructuniqueworkdir', None)
+        if _orig_cwd is not None:
+            def _flat_workdir(self, keyword, sort_by_search_kwd_and_time=True):
+                return _orig_cwd(self, keyword, sort_by_search_kwd_and_time=False)
+            BaseMusicClient._constructuniqueworkdir = _flat_workdir
+            PATCH_STATUS['flat_workdir'] = 'ok'
+        else:
+            PATCH_STATUS['flat_workdir'] = 'skip: _constructuniqueworkdir missing'
+    except Exception as err:
+        PATCH_STATUS['flat_workdir'] = f'skip: {err}'
+
+    # 3) lyrics mode: gate the two halves musicdl always runs (write .lrc /
+    #    embed USLT). If missing, lyrics fall back to musicdl's default (both).
+    try:
+        from musicdl.modules.utils.songinfoutils import SongInfoUtils
+        _orig_savelrc = getattr(SongInfoUtils, 'savelrctofile', None)
+        _orig_embed = getattr(SongInfoUtils, 'embedlyrics', None)
+        if _orig_savelrc and _orig_embed:
+            def _gated_savelrc(audio_path, lyrics_text, *, overwrite=False):
+                if _lyrics_mode() == 'embed':
+                    return False
+                return _orig_savelrc(audio_path, lyrics_text, overwrite=overwrite)
+            def _gated_embed(audio_path, *, overwrite, lyrics_text):
+                if _lyrics_mode() == 'lrc':
+                    return False
+                return _orig_embed(audio_path, overwrite=overwrite, lyrics_text=lyrics_text)
+            SongInfoUtils.savelrctofile = staticmethod(_gated_savelrc)
+            SongInfoUtils.embedlyrics = staticmethod(_gated_embed)
+            PATCH_STATUS['lyrics_mode'] = 'ok'
+        else:
+            PATCH_STATUS['lyrics_mode'] = 'skip: lyric helpers missing'
+    except Exception as err:
+        PATCH_STATUS['lyrics_mode'] = f'skip: {err}'
+
+
+apply_musicdl_patches()
 # MUSICDL_CONFIG lets Docker/NAS persist settings on a mounted volume
 CONFIG_PATH = Path(os.environ.get('MUSICDL_CONFIG', BASE_DIR / 'config.json'))
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
@@ -142,19 +179,26 @@ def pushlog(level: str, message: str):
 
 
 # LoggerHandle uses staticmethods and gets deep-copied into every music client,
-# so hook the class itself: every copy shares these methods.
+# so hook the class itself: every copy shares these methods. Guarded like the
+# other patches — if musicdl reworks LoggerHandle, we just lose the log panel.
 def _hookloggerclass():
-    for level in ('debug', 'info', 'warning', 'error'):
-        orig = getattr(LoggerHandle, level)
-        def make(level, orig):
-            def wrapped(message, disable_print: bool = False, **kwargs):
-                pushlog(level, message)
-                try:
-                    orig(message, disable_print=True)
-                except Exception:
-                    pass
-            return staticmethod(wrapped)
-        setattr(LoggerHandle, level, make(level, orig))
+    try:
+        for level in ('debug', 'info', 'warning', 'error'):
+            orig = getattr(LoggerHandle, level, None)
+            if orig is None:
+                continue
+            def make(level, orig):
+                def wrapped(message, disable_print: bool = False, **kwargs):
+                    pushlog(level, message)
+                    try:
+                        orig(message, disable_print=True)
+                    except Exception:
+                        pass
+                return staticmethod(wrapped)
+            setattr(LoggerHandle, level, make(level, orig))
+        PATCH_STATUS['log_capture'] = 'ok'
+    except Exception as err:
+        PATCH_STATUS['log_capture'] = f'skip: {err}'
 
 
 _hookloggerclass()
@@ -314,6 +358,12 @@ async def raisethreadpool():
     # searches and long-lived audio streams each hold a worker, so raise it.
     import anyio
     anyio.to_thread.current_default_thread_limiter().total_tokens = 200
+    # surface which internal patches took on this musicdl version
+    ok = [k for k, v in PATCH_STATUS.items() if v == 'ok']
+    skipped = {k: v for k, v in PATCH_STATUS.items() if v != 'ok'}
+    pushlog('info', f'musicdl {MUSICDL_VERSION} · 增强补丁生效: {", ".join(ok) or "无"}')
+    if skipped:
+        pushlog('warning', f'以下增强在此 musicdl 版本上未生效（核心功能不受影响）: {skipped}')
 
 
 class SearchBody(BaseModel):
@@ -360,6 +410,26 @@ def meta():
         categorized['其他'] = leftovers
     return {'version': MUSICDL_VERSION, 'categories': categorized, 'default_sources': list(DEFAULT_MUSIC_SOURCES),
             'platform': sys.platform, 'is_windows': IS_WINDOWS}
+
+
+@app.get('/api/health')
+def health():
+    '''installed musicdl version + which internal enhancements took effect.
+    Lets you upgrade musicdl and see at a glance if anything degraded.'''
+    return {'musicdl_version': MUSICDL_VERSION, 'sources_registered': len(MusicClientBuilder.REGISTERED_MODULES),
+            'patches': PATCH_STATUS}
+
+
+@app.get('/api/musicdl/latest')
+def musicdllatest():
+    '''check PyPI for the newest musicdl (read-only; never installs anything)'''
+    try:
+        r = pyrequests.get('https://pypi.org/pypi/musicdl/json', timeout=8)
+        r.raise_for_status()
+        latest = r.json()['info']['version']
+        return {'current': MUSICDL_VERSION, 'latest': latest, 'update_available': latest != MUSICDL_VERSION}
+    except Exception as err:
+        raise HTTPException(502, f'查询 PyPI 失败: {err}')
 
 
 @app.get('/api/config')

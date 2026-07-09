@@ -1128,6 +1128,22 @@
         </details>
       </div>
 
+      <div class="set-section">
+        <h4>关于 musicdl 引擎</h4>
+        <p class="set-hint" style="margin:0 0 8px">
+          搜索 / 播放 / 下载由 <b>musicdl</b> 引擎完成，各音源能否用取决于它。它是可独立升级的：
+          升级只会带来各音源的修复，不需要改本项目（本站对它的增强做了兼容保护，拿不到就自动跳过）。
+        </p>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="set-badge" id="musicdl-ver">musicdl 版本：…</span>
+          <button id="musicdl-check" class="btn btn-ghost ripple-target" style="font-size:12px">检查新版本</button>
+          <span class="set-hint" id="musicdl-update"></span>
+        </div>
+        <p class="set-hint" style="margin:8px 0 0">
+          升级方法：Docker 执行 <code>docker compose up -d --build</code>；本地设 <code>MUSICDL_AUTO_UPDATE=1</code> 再跑 start 脚本，或手动 <code>pip install -U musicdl</code>。
+        </p>
+      </div>
+
       <div class="set-save-row">
         <button id="settings-save" class="btn btn-secondary ripple-target">保存并应用</button>
         <span id="settings-hint" class="set-hint">保存后立即生效，无需重启</span>
@@ -3488,6 +3504,8 @@
       if(psr)psr.checked=true;
       renderProxySources();
       $('proxy-src-box').style.display=pscope==='selected'?'block':'none';
+      if($('musicdl-ver'))$('musicdl-ver').textContent='musicdl 版本：'+(META&&META.version||'?');
+      if($('musicdl-update'))$('musicdl-update').textContent='';
       SW_KEYS.forEach(k=>{const el=$('sw-'+k); if(el)el.checked=!!g[k];});
       $('adv-init').value=JSON.stringify(CONFIG.init_music_clients_cfg||{},null,2);
       $('adv-threads').value=JSON.stringify(CONFIG.clients_threadings||{},null,2);
@@ -3621,6 +3639,13 @@
       $('settings-close').addEventListener('click',()=>$('settings-modal').classList.remove('show'));
       $('settings-modal').addEventListener('click',e=>{if(e.target===$('settings-modal'))$('settings-modal').classList.remove('show');});
       $('settings-save').addEventListener('click',saveSettings);
+      $('musicdl-check').addEventListener('click',async()=>{
+        const out=$('musicdl-update'); out.textContent='检查中…';
+        try{
+          const r=await API.get('/api/musicdl/latest');
+          out.textContent=r.update_available?('有新版 '+r.latest+'（当前 '+r.current+'），可按下方方法升级'):('已是最新（'+r.current+'）');
+        }catch(e){ out.textContent='检查失败：'+e.message; }
+      });
       $('src-all').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=true);renderCookieRows();});
       $('src-none').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=false);renderCookieRows();});
       $('src-default').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=(META.default_sources||[]).includes(cb.value));renderCookieRows();renderProxySources();});
