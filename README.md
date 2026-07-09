@@ -44,18 +44,121 @@ start.bat
 
 ## Docker / NAS 部署（下载直接进 navidrome）
 
+> 适用于群晖 / 威联通 / 一般 Linux 服务器。全程只需要一台装了 Docker 的机器，
+> 不用在上面装 Python。
+
+### 0. 前置条件
+
+- 已安装 **Docker** 和 **Docker Compose**（群晖在「套件中心」装 *Container Manager*；
+  一般 Linux：`curl -fsSL https://get.docker.com | sh`）。
+- 检查是否可用：
+
+  ```bash
+  docker version
+  docker compose version   # 老版本是 docker-compose，命令换成带横杠的即可
+  ```
+
+### 1. 拿到代码
+
 ```bash
-docker compose up -d
-# 访问 http://<主机IP>:8765
+git clone https://github.com/SAGIRIxr/musicdl-webui.git
+cd musicdl-webui
 ```
 
-- 下载目录 `/music` 挂到 **navidrome / Jellyfin 的音乐库同一个宿主机文件夹**即可，
-  下好的歌以 `音源/歌名.ext` **平铺**进去（不再有时间戳套娃文件夹、不再散落 `.pkl` 缓存），
-  navidrome 扫描即入库。`docker-compose.yml` 里附了可选的 navidrome 服务示例。
-- 设置持久化：`config.json` 存到挂载的 `./data`，重建容器不丢配置。
-- 环境变量：`MUSICDL_HOST`（默认容器内 `0.0.0.0`）、`MUSICDL_PORT`、
-  `MUSICDL_WORKDIR`（下载目录）、`MUSICDL_CONFIG`（配置文件路径）。
-- 远程部署时“打开下载目录”按钮会自动隐藏（服务端无桌面）。
+（群晖没装 git 的话，可在 GitHub 页面 *Code → Download ZIP* 下载解压，再进入该目录。）
+
+### 2. 准备目录
+
+仓库里的 `docker-compose.yml` 默认会用到两个相对目录，先建好：
+
+```bash
+mkdir -p music data
+```
+
+- `music/`：**下载目录**，也就是你的音乐库。想让 navidrome 收录，就把它指到 navidrome
+  的音乐库同一个文件夹（见第 5 节）。
+- `data/`：存 `config.json`（音源勾选 / Cookie / 代理 / 下载分类方式等），
+  **重建容器不会丢配置**。
+
+### 3. 启动
+
+```bash
+docker compose up -d --build
+```
+
+- 首次会本地构建镜像（装 ffmpeg + 依赖），约 3–5 分钟，之后启动是秒级。
+- 起来后浏览器访问 **`http://<服务器IP>:8765`**（本机就是 `http://127.0.0.1:8765`）。
+
+看日志 / 状态：
+
+```bash
+docker compose logs -f      # 实时日志，Ctrl+C 退出
+docker compose ps           # 查看运行状态
+```
+
+### 4. 常用运维命令
+
+```bash
+docker compose restart              # 重启
+docker compose down                 # 停止并删除容器（music/ data/ 数据都在，不受影响）
+git pull && docker compose up -d --build   # 更新到最新版（拉代码 → 重建镜像）
+```
+
+### 5. 让下载的歌自动进 navidrome
+
+关键就一句话：**musicdl-webui 的 `/music` 和 navidrome 的音乐库指向同一个宿主机目录**。
+`docker-compose.yml` 里已经附了一段被注释的 navidrome 服务，去掉注释即可一起起：
+
+```yaml
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    restart: unless-stopped
+    ports:
+      - "4533:4533"
+    volumes:
+      - ./music:/music:ro          # ← 和上面 musicdl-webui 的 ./music 是同一个目录
+      - ./navidrome-data:/data
+    environment:
+      - ND_SCANSCHEDULE=1m         # 每分钟扫一次，新歌很快出现
+```
+
+然后在设置里把 **下载分类方式** 选成「歌手 / 专辑」，下载的文件会按
+`music/歌手/专辑/歌名.ext` 归好类，navidrome 扫描即入库，不用任何手动整理。
+
+### 6. 环境变量（可在 `docker-compose.yml` 的 `environment` 里改）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `MUSICDL_HOST` | `0.0.0.0` | 容器内监听地址，一般不用动 |
+| `MUSICDL_PORT` | `8765` | 服务端口（改了记得同步改 `ports` 映射） |
+| `MUSICDL_WORKDIR` | `/music` | 下载目录（容器内路径） |
+| `MUSICDL_CONFIG` | `/data/config.json` | 配置文件路径 |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 无 | 需要科学上网访问某些音源时设置 |
+
+### 7. 不用 compose，直接 `docker run`
+
+```bash
+docker build -t musicdl-webui .
+docker run -d --name musicdl-webui --restart unless-stopped \
+  -p 8765:8765 \
+  -v "$PWD/music:/music" \
+  -v "$PWD/data:/data" \
+  musicdl-webui
+```
+
+### 常见问题
+
+- **端口被占用**：把 `-p 8765:8765` 或 compose 里的 `ports` 改成 `18765:8765`，
+  再用 `http://<IP>:18765` 访问。
+- **下载的文件在宿主机没权限 / navidrome 读不到**：给 `music/` 目录放开权限
+  `chmod -R 777 music`（或按需设 owner）。群晖建议把 `./music` 换成共享文件夹的
+  绝对路径，如 `/volume1/music:/music`。
+- **某些音源搜不出来**：多为需要代理，按第 6 节设 `HTTP_PROXY`；
+  群晖代理常写 `http://<宿主机IP>:7890`（不要用 `127.0.0.1`，容器内的 127 是它自己）。
+- **“打开下载目录”按钮消失了**：这是正常的——服务端在容器里没有桌面，
+  该按钮只在 Windows 本机运行时出现；文件请到「已下载文件」列表里下载或直接到 `music/` 取。
+- **改了设置要重来**：设置存在 `data/config.json`，删掉这个文件即恢复默认。
 
 ## 设置说明（⚙️ 按钮）
 
