@@ -1,5 +1,6 @@
 @echo off
 cd /d %~dp0
+set PYTHONIOENCODING=utf-8
 if not exist venv\Scripts\python.exe (
     echo [musicdl-webui] creating venv...
     py -3.13 -m venv venv
