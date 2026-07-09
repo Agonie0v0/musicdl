@@ -257,6 +257,14 @@ def serializesong(sid: str, song) -> dict:
 app = FastAPI(title='musicdl WebUI')
 
 
+@app.on_event('startup')
+async def raisethreadpool():
+    # sync endpoints share one AnyIO threadpool (default 40). Slow source
+    # searches and long-lived audio streams each hold a worker, so raise it.
+    import anyio
+    anyio.to_thread.current_default_thread_limiter().total_tokens = 200
+
+
 class SearchBody(BaseModel):
     keyword: str
     sources: list[str] | None = None

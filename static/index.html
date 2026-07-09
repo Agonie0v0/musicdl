@@ -3034,6 +3034,7 @@
 
     function searchAllSources(reset){
       if(!state.searchKeyword){showToast(t('toastNeedKeyword'));return;}
+      if(state.searchInProgress){showToast(state.language==='zh'?'搜索进行中，请稍候…（慢的音源可能要一两分钟）':'Search in progress, please wait…');return;}
       const enabled=Object.keys(state.enabledSources).filter(k=>state.enabledSources[k]);
       if(!enabled.length){showToast(t('searchStatusNoSource'));return;}
       if(reset){
