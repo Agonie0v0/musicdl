@@ -172,10 +172,46 @@ docker run -d --name musicdl-webui --restart unless-stopped \
 - **歌词保存方式**：单独 `.lrc` 文件 / 嵌入歌曲文件 / 两者都要
 - **代理作用范围**：全部音源 / 仅指定音源——国内音源一般不用代理，只让 Spotify、
   YouTube、苹果等国际音源走代理，可勾选指定
-- **开关**：auto_set_proxies / random_update_ua / maintain_session / curl_cffi ×3 等
-- **高级**：按音源 JSON 覆盖 `init_music_clients_cfg` / `clients_threadings` / `requests_overrides` / `search_rules`
-
 所有配置保存在 `config.json`，保存即重建 musicdl 客户端，无需重启。
+
+### 高级开关都是什么意思
+
+> 一句话：**默认全部关着就能正常用**。只有当「某个音源搜不到 / 点了播放没声音 / 下载老失败」时，
+> 才按下面对症逐个打开试试。
+
+| 开关 | 打开后 | 什么时候开 |
+|---|---|---|
+| 搜索用浏览器指纹 `enable_search_curl_cffi` | 搜索请求模拟真实浏览器的 TLS 指纹 | 某个音源**搜不出结果**（常见于被 Cloudflare 拦） |
+| 解析用浏览器指纹 `enable_parse_curl_cffi` | 获取播放 / 下载直链时模拟浏览器 | 能搜到但**点播放没声音 / 报错** |
+| 下载用浏览器指纹 `enable_download_curl_cffi` | 下载文件时模拟浏览器 | **下载总是失败** |
+| 随机 UA `random_update_ua` | 每次请求换一个浏览器标识 | 个别源**频繁失败**、疑似被反爬识别 |
+| 自动找免费代理 `auto_set_proxies` | 连不上时自动抓公共代理重试 | 没有自己的代理又连不上时（**很慢很不稳**，有代理请直接填「HTTP 代理」） |
+| 保持会话 `maintain_session` | 复用连接与 Cookie，略快 | 想快一点；偶发异常就关掉 |
+| 严格分页限制 `strict_limit_search_size_per_page` | 严格按「每页大小」截断结果 | **建议保持勾选** |
+
+### 专家选项：按音源写 JSON 覆盖（一般用不到）
+
+给**单个音源**单独调参用，键是完整音源名（如 `"NeteaseMusicClient"`），留 `{}` 表示不覆盖。
+普通使用完全可以跳过；改错只会让那个音源初始化失败。四个框各自的作用与例子：
+
+- **`init_music_clients_cfg`** — 覆盖某音源的客户端参数（结果数、work_dir、cookies 等）。
+  例：让网易云单独多返回一些结果 —
+  ```json
+  {"NeteaseMusicClient": {"search_size_per_source": 20}}
+  ```
+- **`clients_threadings`** — 给某音源单独设并发线程数。例：咪咕慢，降到 3 线程 —
+  ```json
+  {"MiguMusicClient": 3}
+  ```
+- **`requests_overrides`** — 给某音源单独设代理 / 超时 / 请求头。
+  例：只给 Spotify 设 60 秒超时和单独代理 —
+  ```json
+  {"SpotifyMusicClient": {"timeout": 60, "proxies": {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}}}
+  ```
+- **`search_rules`** — 给某音源传特定搜索规则（少数源支持，一般留空 `{}`）。
+
+> 提示：上面「基础」「代理作用范围」这些图形化设置已覆盖绝大多数需求，
+> 只有要**对个别音源精细化调参**时才需要动这四个 JSON 框。
 
 ## 结构
 

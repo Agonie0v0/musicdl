@@ -548,13 +548,25 @@
       width: 100%;
     }
     .set-field input:focus, .set-section textarea:focus { border-color: var(--accent); }
-    .set-switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 4px 12px; }
+    .set-switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
     .set-switches label {
       display: flex; gap: 8px; align-items: center;
       font-size: 12px; font-weight: 600; color: var(--text-sub);
       cursor: pointer; padding: 4px 0;
     }
     .set-switches input { accent-color: var(--accent); margin: 0; }
+    .sw-item {
+      align-items: flex-start !important; padding: 10px 12px !important;
+      border: 1px solid var(--border); border-radius: 12px; background: var(--card); transition: border-color .15s;
+    }
+    .sw-item:hover { border-color: var(--accent); }
+    .sw-item:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+    .sw-item input { margin-top: 2px !important; flex-shrink: 0; }
+    .sw-txt { display: flex; flex-direction: column; gap: 2px; }
+    .sw-txt b { font-size: 13px; color: var(--text-main); font-weight: 700; }
+    .sw-txt small { font-size: 11px; color: var(--text-faint); font-weight: 600; line-height: 1.35; }
+    .set-badge { font-size: 11px; font-weight: 600; color: var(--text-faint); margin-left: 8px; }
+    .set-json code, .set-field code { background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; font-size: 11.5px; }
     .ck-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
     .ck-row .ck-name { font-size: 12px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px; }
     .ck-row textarea { width: 100%; min-height: 36px; resize: vertical; }
@@ -711,7 +723,7 @@
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
     <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><rect x="3" y="14" width="4" height="7" rx="2"/><rect x="17" y="14" width="4" height="7" rx="2"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
-    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V15z"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
     <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6"/></symbol>
     <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7Z"/></symbol>
@@ -1088,26 +1100,30 @@
       </div>
 
       <div class="set-section">
-        <h4>开关</h4>
+        <h4>高级开关 <span class="set-badge">默认全关即可，搜不到 / 播放失败时再逐个试</span></h4>
         <div class="set-switches">
-          <label><input type="checkbox" id="sw-auto_set_proxies"> 自动设置代理 auto_set_proxies</label>
-          <label><input type="checkbox" id="sw-random_update_ua"> 随机 UA random_update_ua</label>
-          <label><input type="checkbox" id="sw-maintain_session"> 保持会话 maintain_session</label>
-          <label><input type="checkbox" id="sw-strict_limit_search_size_per_page"> 严格分页限制</label>
-          <label><input type="checkbox" id="sw-enable_search_curl_cffi"> 搜索用 curl_cffi（模拟浏览器指纹）</label>
-          <label><input type="checkbox" id="sw-enable_parse_curl_cffi"> 解析用 curl_cffi</label>
-          <label><input type="checkbox" id="sw-enable_download_curl_cffi"> 下载用 curl_cffi</label>
+          <label class="sw-item"><input type="checkbox" id="sw-enable_search_curl_cffi"><span class="sw-txt"><b>搜索用浏览器指纹</b><small>搜索时模拟真实浏览器，绕开 Cloudflare 拦截（某些源搜不到时开）</small></span></label>
+          <label class="sw-item"><input type="checkbox" id="sw-enable_parse_curl_cffi"><span class="sw-txt"><b>解析用浏览器指纹</b><small>获取播放 / 下载链接时模拟浏览器（点了播放没声音 / 报错时开）</small></span></label>
+          <label class="sw-item"><input type="checkbox" id="sw-enable_download_curl_cffi"><span class="sw-txt"><b>下载用浏览器指纹</b><small>下载文件时模拟浏览器（下载总失败时开）</small></span></label>
+          <label class="sw-item"><input type="checkbox" id="sw-random_update_ua"><span class="sw-txt"><b>随机 UA</b><small>每次请求换一个浏览器标识，降低被反爬识别（个别源频繁失败时开）</small></span></label>
+          <label class="sw-item"><input type="checkbox" id="sw-auto_set_proxies"><span class="sw-txt"><b>自动找免费代理</b><small>连不上时自动抓公共代理重试，很慢很不稳；有固定代理请填上面的“HTTP 代理”</small></span></label>
+          <label class="sw-item"><input type="checkbox" id="sw-maintain_session"><span class="sw-txt"><b>保持会话</b><small>复用连接与 Cookie，略快；偶发异常时关掉</small></span></label>
+          <label class="sw-item"><input type="checkbox" id="sw-strict_limit_search_size_per_page"><span class="sw-txt"><b>严格分页限制</b><small>严格按“每页大小”截断结果，建议保持勾选</small></span></label>
         </div>
       </div>
 
       <div class="set-section">
         <details class="set-json">
-          <summary>高级：按音源 JSON 覆盖（键为完整音源名，如 "NeteaseMusicClient"）</summary>
+          <summary>专家选项：按音源写 JSON 覆盖（一般用不到，可跳过）</summary>
+          <p class="set-hint" style="margin:10px 0">
+            给<b>单个音源</b>单独调参用，键是完整音源名（如 <code>"NeteaseMusicClient"</code>）。留 <code>{}</code> 表示不覆盖。
+            用法举例见 <b>README「设置项详解」</b>。改错会导致该音源初始化失败，拿不准就别动。
+          </p>
           <div class="set-grid">
-            <label class="set-field">init_music_clients_cfg 客户端参数覆盖<textarea id="adv-init" spellcheck="false"></textarea></label>
-            <label class="set-field">clients_threadings 线程数覆盖<textarea id="adv-threads" spellcheck="false"></textarea></label>
-            <label class="set-field">requests_overrides 请求参数覆盖<textarea id="adv-requests" spellcheck="false"></textarea></label>
-            <label class="set-field">search_rules 搜索规则<textarea id="adv-rules" spellcheck="false"></textarea></label>
+            <label class="set-field">init_music_clients_cfg（客户端参数，如给某源单独设 work_dir / cookies）<textarea id="adv-init" spellcheck="false" placeholder='{"NeteaseMusicClient": {"search_size_per_source": 20}}'></textarea></label>
+            <label class="set-field">clients_threadings（给某源单独设线程数）<textarea id="adv-threads" spellcheck="false" placeholder='{"MiguMusicClient": 3}'></textarea></label>
+            <label class="set-field">requests_overrides（给某源单独设代理 / 超时 / 请求头）<textarea id="adv-requests" spellcheck="false" placeholder='{"SpotifyMusicClient": {"timeout": 60}}'></textarea></label>
+            <label class="set-field">search_rules（给某源传特定搜索规则）<textarea id="adv-rules" spellcheck="false" placeholder='{}'></textarea></label>
           </div>
         </details>
       </div>
