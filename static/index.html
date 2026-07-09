@@ -447,10 +447,10 @@
     }
     .track-item > div:nth-child(2) { flex: 1; min-width: 0; }
     .track-meta-title { font-size: 13px; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .track-meta-sub { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-sub); margin-top: 2px; overflow: hidden; }
-    .track-meta-sub > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-meta-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 7px; font-size: 11px; color: var(--text-sub); margin-top: 2px; }
     .track-meta-sub > span { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
-    .track-meta-sub > span:first-child { flex-shrink: 1; }
+    /* 歌手占第一行主要宽度，源/音质徽标放不下时自动换到下一行，不再挤掉歌手名 */
+    .track-meta-sub > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 4em; max-width: 100%; }
     .track-actions { display: flex; gap: 4px; flex-shrink: 0; }
     .track-actions .btn-icon { width: 29px; height: 29px; border-radius: 9px; }
     .track-actions .btn-icon .ic { width: 14px; height: 14px; }
@@ -899,6 +899,7 @@
                   <option value="artist">按歌手</option>
                   <option value="source">按音源</option>
                   <option value="duration">按时长</option>
+                  <option value="size">按大小</option>
                 </select>
                 <button id="sort-dir-btn" class="playmode-btn ripple-target" title="升序 / 降序" data-dir="asc"><span id="sort-dir-glyph" style="font-weight:800;font-size:14px">↑</span></button>
                 <button class="playmode-btn active ripple-target" data-mode="list" title="列表循环"><svg class="ic"><use href="#i-repeat"/></svg></button>
@@ -1057,6 +1058,32 @@
           <label class="layout-opt"><input type="radio" name="dl-layout" value="artist"><span><b>按歌手</b><small>下载目录 / 歌手 / 歌名</small></span></label>
           <label class="layout-opt"><input type="radio" name="dl-layout" value="artist_album"><span><b>歌手 / 专辑</b><small>下载目录 / 歌手 / 专辑 / 歌名 · 最适合媒体库</small></span></label>
           <label class="layout-opt"><input type="radio" name="dl-layout" value="flat"><span><b>全部平铺</b><small>全部歌曲直接放在下载目录根部</small></span></label>
+        </div>
+      </div>
+
+      <div class="set-section">
+        <h4>歌词保存方式</h4>
+        <p class="set-hint" style="margin:0 0 10px">
+          决定下载时歌词怎么存。播放器多数认单独的 <b>.lrc</b> 文件；部分媒体库 / 车机认歌曲内嵌歌词。
+        </p>
+        <div class="set-layouts">
+          <label class="layout-opt"><input type="radio" name="lyrics-mode" value="lrc"><span><b>单独 .lrc 文件</b><small>歌曲旁生成同名 .lrc</small></span></label>
+          <label class="layout-opt"><input type="radio" name="lyrics-mode" value="embed"><span><b>嵌入歌曲文件</b><small>写进音频标签，不额外生成文件</small></span></label>
+          <label class="layout-opt"><input type="radio" name="lyrics-mode" value="both"><span><b>两者都要</b><small>.lrc + 内嵌，兼容性最好（默认）</small></span></label>
+        </div>
+      </div>
+
+      <div class="set-section">
+        <h4>代理作用范围</h4>
+        <p class="set-hint" style="margin:0 0 10px">
+          上面填了 HTTP 代理才生效。国内音源通常<b>不需要</b>代理，只有 Spotify / YouTube / 苹果等国际音源要走代理时，选“仅指定音源”并勾选它们即可。
+        </p>
+        <div class="set-layouts" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+          <label class="layout-opt"><input type="radio" name="proxy-scope" value="all"><span><b>全部音源用代理</b><small>所有启用的音源都走代理</small></span></label>
+          <label class="layout-opt"><input type="radio" name="proxy-scope" value="selected"><span><b>仅指定音源用代理</b><small>只有下面勾选的音源走代理</small></span></label>
+        </div>
+        <div id="proxy-src-box" style="margin-top:10px;display:none">
+          <div id="proxy-sources" class="set-src-grid"></div>
         </div>
       </div>
 
@@ -2535,12 +2562,20 @@
       if(s.includes(':')){ return s.split(':').reduce((acc,v)=>acc*60+(parseInt(v)||0),0); }
       const n=parseFloat(s); return isNaN(n)?-1:n;
     }
+    function sizeToBytes(x){
+      const s=String(x||'').trim(); if(!s)return -1;
+      const m=s.match(/([\d.]+)\s*(g|m|k)?/i); if(!m)return -1;
+      const n=parseFloat(m[1]); if(isNaN(n))return -1;
+      const unit=(m[2]||'m').toLowerCase();  // 后端 file_size 一般是 MB
+      return n*(unit==='g'?1073741824:unit==='k'?1024:1048576);
+    }
     function sortTrackList(list){
       if(state.sortBy==='default') return list;
       const dir=state.sortDir==='desc'?-1:1;
       const key=state.sortBy;
       const cmp=(a,b)=>{
         if(key==='duration') return (durationToSec(a.duration)-durationToSec(b.duration))*dir;
+        if(key==='size') return (sizeToBytes(a.fileSize)-sizeToBytes(b.fileSize))*dir;
         const va=String((key==='title'?a.title:key==='artist'?a.artist:sourceLabel(a.source))||'');
         const vb=String((key==='title'?b.title:key==='artist'?b.artist:sourceLabel(b.source))||'');
         return va.localeCompare(vb,'zh-Hans-CN')*dir;
@@ -3186,6 +3221,23 @@
       });
     }
 
+    // 代理作用范围：列出当前启用的音源，勾选哪些走代理
+    function renderProxySources(){
+      const box=$('proxy-sources'); if(!box||!CONFIG)return;
+      const picked=new Set(CONFIG.proxy_sources||[]);
+      const enabled=[...document.querySelectorAll('.set-src-cb:checked')].map(cb=>cb.value);
+      const list=enabled.length?enabled:(CONFIG.music_sources||[]);
+      box.innerHTML='';
+      list.forEach(full=>{
+        const label=document.createElement('label');
+        const cb=document.createElement('input'); cb.type='checkbox'; cb.value=full; cb.className='proxy-src-cb';
+        cb.checked=picked.has(full);
+        const dot=document.createElement('span'); dot.className='source-dot'; applySourceDot(dot,shortName(full));
+        const sp=document.createElement('span'); sp.textContent=sourceLabel(shortName(full));
+        label.append(cb,dot,sp); box.appendChild(label);
+      });
+    }
+
     function trackFromBackend(s,displayIndex){
       return {
         uid:s.source+'-'+s.id, backendId:s.id, source:s.source,
@@ -3393,7 +3445,7 @@
           const label=document.createElement('label');
           const cb=document.createElement('input'); cb.type='checkbox'; cb.value=full; cb.className='set-src-cb';
           cb.checked=CONFIG.music_sources.includes(full);
-          cb.addEventListener('change',renderCookieRows);
+          cb.addEventListener('change',()=>{renderCookieRows();renderProxySources();});
           const dot=document.createElement('span'); dot.className='source-dot'; applySourceDot(dot,shortName(full));
           const sp=document.createElement('span'); sp.textContent=sourceLabel(shortName(full));
           label.append(cb,dot,sp); grid.appendChild(label);
@@ -3411,6 +3463,15 @@
       const layout=CONFIG.download_layout||'source';
       const lr=document.querySelector('input[name="dl-layout"][value="'+layout+'"]')||document.querySelector('input[name="dl-layout"][value="source"]');
       if(lr)lr.checked=true;
+      const lm=CONFIG.lyrics_mode||'both';
+      const lmr=document.querySelector('input[name="lyrics-mode"][value="'+lm+'"]')||document.querySelector('input[name="lyrics-mode"][value="both"]');
+      if(lmr)lmr.checked=true;
+      // 代理作用范围
+      const pscope=CONFIG.proxy_scope||'all';
+      const psr=document.querySelector('input[name="proxy-scope"][value="'+pscope+'"]')||document.querySelector('input[name="proxy-scope"][value="all"]');
+      if(psr)psr.checked=true;
+      renderProxySources();
+      $('proxy-src-box').style.display=pscope==='selected'?'block':'none';
       SW_KEYS.forEach(k=>{const el=$('sw-'+k); if(el)el.checked=!!g[k];});
       $('adv-init').value=JSON.stringify(CONFIG.init_music_clients_cfg||{},null,2);
       $('adv-threads').value=JSON.stringify(CONFIG.clients_threadings||{},null,2);
@@ -3455,12 +3516,18 @@
       });
       SW_KEYS.forEach(k=>{const el=$('sw-'+k); if(el)g[k]=el.checked;});
       const dlLayoutEl=document.querySelector('input[name="dl-layout"]:checked');
+      const lyricsEl=document.querySelector('input[name="lyrics-mode"]:checked');
+      const proxyScopeEl=document.querySelector('input[name="proxy-scope"]:checked');
+      const proxySources=[...document.querySelectorAll('.proxy-src-cb:checked')].map(cb=>cb.value);
       const cfg=Object.assign({
         music_sources, global_client_cfg:g,
         proxy_url:$('set-proxy').value.trim(),
+        proxy_scope:proxyScopeEl?proxyScopeEl.value:'all',
+        proxy_sources:proxySources,
         request_timeout:parseInt($('set-timeout').value)||0,
         default_threads:parseInt($('set-threads').value)||5,
         download_layout:dlLayoutEl?dlLayoutEl.value:'source',
+        lyrics_mode:lyricsEl?lyricsEl.value:'both',
         cookies
       },jsons);
       const btn=$('settings-save'); btn.disabled=true;
@@ -3540,7 +3607,11 @@
       $('settings-save').addEventListener('click',saveSettings);
       $('src-all').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=true);renderCookieRows();});
       $('src-none').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=false);renderCookieRows();});
-      $('src-default').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=(META.default_sources||[]).includes(cb.value));renderCookieRows();});
+      $('src-default').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=(META.default_sources||[]).includes(cb.value));renderCookieRows();renderProxySources();});
+      document.querySelectorAll('input[name="proxy-scope"]').forEach(r=>r.addEventListener('change',()=>{
+        $('proxy-src-box').style.display=r.value==='selected'&&r.checked?'block':'none';
+        if(r.value==='selected'&&r.checked)renderProxySources();
+      }));
       $('downloads-toggle-btn').addEventListener('click',openDownloads);
       $('downloads-close').addEventListener('click',closeDownloads);
       $('downloads-modal').addEventListener('click',e=>{if(e.target===$('downloads-modal'))closeDownloads();});

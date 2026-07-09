@@ -169,6 +169,9 @@ docker run -d --name musicdl-webui --restart unless-stopped \
 - **基础**：下载目录、每源结果数、分页、重试、线程、超时、HTTP 代理
 - **下载分类方式**：按音源 / 按歌手 / 歌手·专辑 / 全部平铺——决定歌曲在下载目录里怎么归类，
   喂 navidrome / Jellyfin 建议选「歌手 / 专辑」（`下载目录/歌手/专辑/歌名`）
+- **歌词保存方式**：单独 `.lrc` 文件 / 嵌入歌曲文件 / 两者都要
+- **代理作用范围**：全部音源 / 仅指定音源——国内音源一般不用代理，只让 Spotify、
+  YouTube、苹果等国际音源走代理，可勾选指定
 - **开关**：auto_set_proxies / random_update_ua / maintain_session / curl_cffi ×3 等
 - **高级**：按音源 JSON 覆盖 `init_music_clients_cfg` / `clients_threadings` / `requests_overrides` / `search_rules`
 

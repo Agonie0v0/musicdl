@@ -59,6 +59,28 @@ _orig_constructworkdir = BaseMusicClient._constructuniqueworkdir
 def _flat_workdir(self, keyword, sort_by_search_kwd_and_time=True):
     return _orig_constructworkdir(self, keyword, sort_by_search_kwd_and_time=False)
 BaseMusicClient._constructuniqueworkdir = _flat_workdir
+
+# --- lyrics mode: separate .lrc file / embedded in the audio / both ----------
+# musicdl always does both (writes <name>.lrc AND embeds a USLT/lyrics tag).
+# Gate each half on config['lyrics_mode']: 'lrc' | 'embed' | 'both' (default both).
+from musicdl.modules.utils.songinfoutils import SongInfoUtils
+_orig_savelrc = SongInfoUtils.savelrctofile
+_orig_embedlyrics = SongInfoUtils.embedlyrics
+def _lyrics_mode():
+    try:
+        return manager.config.get('lyrics_mode', 'both')
+    except Exception:
+        return 'both'
+def _gated_savelrc(audio_path, lyrics_text, *, overwrite=False):
+    if _lyrics_mode() == 'embed':
+        return False  # 只嵌入，不写单独 .lrc
+    return _orig_savelrc(audio_path, lyrics_text, overwrite=overwrite)
+def _gated_embedlyrics(audio_path, *, overwrite, lyrics_text):
+    if _lyrics_mode() == 'lrc':
+        return False  # 只写单独 .lrc，不嵌入
+    return _orig_embedlyrics(audio_path, overwrite=overwrite, lyrics_text=lyrics_text)
+SongInfoUtils.savelrctofile = staticmethod(_gated_savelrc)
+SongInfoUtils.embedlyrics = staticmethod(_gated_embedlyrics)
 # MUSICDL_CONFIG lets Docker/NAS persist settings on a mounted volume
 CONFIG_PATH = Path(os.environ.get('MUSICDL_CONFIG', BASE_DIR / 'config.json'))
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
@@ -96,10 +118,15 @@ DEFAULT_CONFIG = {
         'enable_download_curl_cffi': False,
     },
     'proxy_url': '',
+    # 代理作用范围：all 全部音源 / selected 仅 proxy_sources 里的音源
+    'proxy_scope': 'all',
+    'proxy_sources': [],
     'request_timeout': 30,
     'default_threads': 10,
     # 下载分类方式：source 按音源 / artist 按歌手 / artist_album 歌手·专辑 / flat 全部平铺
     'download_layout': 'source',
+    # 歌词保存方式：lrc 单独文件 / embed 嵌入歌曲 / both 两者都要
+    'lyrics_mode': 'both',
     'cookies': {},
     'init_music_clients_cfg': {},
     'clients_threadings': {},
@@ -180,6 +207,8 @@ class ClientManager:
             raise ValueError('至少需要启用一个音源')
         init_cfgs, threadings, req_overrides, rules = {}, {}, {}, {}
         proxy_url = (cfg.get('proxy_url') or '').strip()
+        proxy_scope = cfg.get('proxy_scope', 'all')
+        proxy_sources = set(cfg.get('proxy_sources') or [])
         for source in sources:
             per_cfg = dict(cfg['global_client_cfg'])
             per_cfg.update(cfg['init_music_clients_cfg'].get(source, {}))
@@ -191,7 +220,8 @@ class ClientManager:
             init_cfgs[source] = per_cfg
             threadings[source] = int(cfg['clients_threadings'].get(source, cfg.get('default_threads', 5)))
             overrides = dict(cfg['requests_overrides'].get(source, {}))
-            if proxy_url and 'proxies' not in overrides:
+            use_proxy = proxy_url and (proxy_scope == 'all' or source in proxy_sources)
+            if use_proxy and 'proxies' not in overrides:
                 overrides['proxies'] = {'http': proxy_url, 'https': proxy_url}
             timeout = int(cfg.get('request_timeout', 30) or 0)
             if timeout > 0 and 'timeout' not in overrides:
@@ -303,9 +333,12 @@ class ConfigBody(BaseModel):
     music_sources: list[str]
     global_client_cfg: dict
     proxy_url: str = ''
+    proxy_scope: str = 'all'
+    proxy_sources: list[str] = []
     request_timeout: int = 30
     default_threads: int = 5
     download_layout: str = 'source'
+    lyrics_mode: str = 'both'
     cookies: dict = {}
     init_music_clients_cfg: dict = {}
     clients_threadings: dict = {}
@@ -433,8 +466,11 @@ def stream(sid: str, request: Request):
         headers['Range'] = request.headers['range']
     proxies = manager.config['requests_overrides'].get(song.source, {}).get('proxies')
     if proxies is None and (manager.config.get('proxy_url') or '').strip():
-        p = manager.config['proxy_url'].strip()
-        proxies = {'http': p, 'https': p}
+        scope = manager.config.get('proxy_scope', 'all')
+        srcs = set(manager.config.get('proxy_sources') or [])
+        if scope == 'all' or song.source in srcs:
+            p = manager.config['proxy_url'].strip()
+            proxies = {'http': p, 'https': p}
     kwargs = {'stream': True, 'headers': headers, 'cookies': cookies, 'timeout': 30, 'proxies': proxies}
     try:
         upstream = pyrequests.get(song.download_url, **kwargs)
