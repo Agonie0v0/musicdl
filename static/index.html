@@ -231,6 +231,7 @@
     .search-results-mini { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
     .search-mini-item {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      flex-shrink: 0;
       background: var(--card-soft); border: 1px solid transparent;
       border-radius: 12px; padding: 8px 10px; cursor: pointer;
       transition: all .15s; position: relative; overflow: hidden;
@@ -415,6 +416,7 @@
     .playlist-list { display: flex; flex-direction: column; gap: 6px; }
     .track-item {
       display: flex; align-items: center; gap: 10px;
+      flex-shrink: 0;
       background: var(--card-soft); border: 1px solid transparent;
       border-radius: 12px; padding: 8px 10px; cursor: pointer;
       transition: all .15s; position: relative; overflow: hidden;

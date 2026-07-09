@@ -78,7 +78,7 @@ DEFAULT_CONFIG = {
     },
     'proxy_url': '',
     'request_timeout': 30,
-    'default_threads': 5,
+    'default_threads': 10,
     'cookies': {},
     'init_music_clients_cfg': {},
     'clients_threadings': {},
