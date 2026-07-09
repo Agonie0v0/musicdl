@@ -554,6 +554,28 @@ def download(body: DownloadBody):
     return {'task_id': task_id}
 
 
+@app.post('/api/tasks/clear-finished')
+def clearfinishedtasks():
+    finished = [tid for tid in TASK_ORDER if TASKS[tid]['status'] in ('done', 'failed', 'partial')]
+    for tid in finished:
+        TASK_ORDER.remove(tid)
+        TASKS.pop(tid, None)
+    return {'removed': len(finished)}
+
+
+@app.post('/api/open-dir')
+def opendir():
+    '''open the main download dir in Explorer (local deployments only)'''
+    main = Path(manager.config['global_client_cfg'].get('work_dir') or 'musicdl_outputs')
+    main = (main if main.is_absolute() else BASE_DIR / main).resolve()
+    main.mkdir(parents=True, exist_ok=True)
+    try:
+        os.startfile(str(main))
+    except Exception as err:
+        raise HTTPException(500, f'无法打开目录: {err}')
+    return {'ok': True, 'dir': str(main)}
+
+
 @app.get('/api/tasks')
 def tasks():
     out = []
