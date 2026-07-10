@@ -1137,10 +1137,12 @@
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span class="set-badge" id="musicdl-ver">musicdl 版本：…</span>
           <button id="musicdl-check" class="btn btn-ghost ripple-target" style="font-size:12px">检查新版本</button>
+          <button id="musicdl-upgrade" class="btn btn-secondary ripple-target" style="font-size:12px">一键升级并重启</button>
           <span class="set-hint" id="musicdl-update"></span>
         </div>
         <p class="set-hint" style="margin:8px 0 0">
-          升级方法：Docker 执行 <code>docker compose up -d --build</code>；本地设 <code>MUSICDL_AUTO_UPDATE=1</code> 再跑 start 脚本，或手动 <code>pip install -U musicdl</code>。
+          「一键升级并重启」会自动完成 <code>pip install -U musicdl</code> → 重启服务 → 刷新页面，全程约半分钟。
+          （本地请用 start 脚本启动才能自动拉起；Docker 由 restart 策略自动拉起，但重建镜像后需再升一次或改用 <code>docker compose up -d --build</code>。）
         </p>
       </div>
 
@@ -3070,7 +3072,11 @@
       dom.shortcutCloseBtn.addEventListener('click',()=>{dom.shortcutModal.classList.remove('show');});
       dom.shortcutModal.addEventListener('click',e=>{if(e.target===dom.shortcutModal)dom.shortcutModal.classList.remove('show');});
 
-      $('sort-select').addEventListener('change',()=>{ state.sortBy=$('sort-select').value; renderPlaylistList(); });
+      $('sort-select').addEventListener('change',()=>{
+        state.sortBy=$('sort-select').value;
+        $('sort-dir-btn').classList.toggle('active',state.sortBy!=='default');
+        renderPlaylistList();
+      });
       $('sort-dir-btn').addEventListener('click',()=>{
         state.sortDir=state.sortDir==='asc'?'desc':'asc';
         $('sort-dir-glyph').textContent=state.sortDir==='asc'?'↑':'↓';
@@ -3643,8 +3649,33 @@
         const out=$('musicdl-update'); out.textContent='检查中…';
         try{
           const r=await API.get('/api/musicdl/latest');
-          out.textContent=r.update_available?('有新版 '+r.latest+'（当前 '+r.current+'），可按下方方法升级'):('已是最新（'+r.current+'）');
+          out.textContent=r.update_available?('有新版 '+r.latest+'（当前 '+r.current+'），点「一键升级并重启」即可'):('已是最新（'+r.current+'）');
         }catch(e){ out.textContent='检查失败：'+e.message; }
+      });
+      // 一键升级并重启：pip -U → 轮询完成 → 重启 → 等服务回来 → 刷新页面
+      $('musicdl-upgrade').addEventListener('click',async()=>{
+        if(!window.confirm('将把 musicdl 引擎升级到最新版并自动重启服务（约半分钟，期间搜索/播放会中断），继续？'))return;
+        const out=$('musicdl-update'), btn=$('musicdl-upgrade');
+        btn.disabled=true;
+        try{
+          out.textContent='升级中…（下载安装可能要 1-2 分钟，请勿关闭页面）';
+          await API.send('/api/musicdl/update',{});
+          let st=null;
+          for(;;){
+            await new Promise(r=>setTimeout(r,2000));
+            st=await API.get('/api/musicdl/update');
+            if(!st.running)break;
+          }
+          if(st.ok===false){ out.textContent='升级失败：'+(st.detail||'未知错误'); btn.disabled=false; return; }
+          if(!st.to||st.to===st.current){ out.textContent='已是最新（'+st.current+'），无需重启'; btn.disabled=false; return; }
+          out.textContent='已升到 '+st.to+'，正在重启服务…';
+          await API.send('/api/restart',{});
+          for(let i=0;i<40;i++){
+            await new Promise(r=>setTimeout(r,1500));
+            try{ await API.get('/api/health'); out.textContent='重启完成，刷新页面…'; location.reload(); return; }catch(e){}
+          }
+          out.textContent='服务未自动回来：本地请确认是用 start 脚本启动的（旧脚本没有自动拉起，请更新后重跑）';
+        }catch(e){ out.textContent='操作失败：'+e.message; btn.disabled=false; }
       });
       $('src-all').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=true);renderCookieRows();});
       $('src-none').addEventListener('click',()=>{document.querySelectorAll('.set-src-cb').forEach(cb=>cb.checked=false);renderCookieRows();});

@@ -228,10 +228,15 @@ patch 了一些 musicdl 内部方法。这些 patch 全部做了**兼容保护**
 
 | 场景 | 操作 |
 |---|---|
+| **网页一键（推荐）** | 设置 → 关于 musicdl 引擎 → **一键升级并重启**，自动完成升级+重启+刷新页面 |
 | Docker / NAS | `docker compose up -d --build`（重建即拉最新 musicdl） |
 | 本地手动 | `venv\Scripts\pip install -U musicdl`（Linux/mac：`venv/bin/pip install -U musicdl`） |
 | 本地自动 | 设环境变量 `MUSICDL_AUTO_UPDATE=1` 再运行 `start.bat` / `start.sh`，每次启动自动升 |
 | 想回退 | `pip install musicdl==2.13.1`，或把 `requirements.txt` 钉回某版本 |
+
+> 「一键升级并重启」依赖服务能被自动拉起：本地用 **start 脚本**启动（脚本内置重启循环，
+> 旧版脚本请更新）；Docker 由 `restart: unless-stopped` 自动拉起。手动 `python app.py` 裸跑的话，
+> 重启后不会自己回来。
 
 **怎么查看状态：** 设置弹窗底部「关于 musicdl 引擎」可看当前版本、点「检查新版本」；
 接口层 `GET /api/health` 返回版本 + 各增强补丁是否生效，`GET /api/musicdl/latest` 查 PyPI 最新版。

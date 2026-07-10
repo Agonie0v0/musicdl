@@ -12,4 +12,10 @@ if "%MUSICDL_AUTO_UPDATE%"=="1" (
     venv\Scripts\pip install -U musicdl
 )
 echo [musicdl-webui] starting at http://127.0.0.1:8765
+:run
 venv\Scripts\python app.py
+REM 退出码 88 = 网页里点了“重启服务”（如升级 musicdl 后），自动拉起
+if %errorlevel%==88 (
+    echo [musicdl-webui] restarting...
+    goto run
+)

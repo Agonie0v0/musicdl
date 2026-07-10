@@ -420,6 +420,10 @@ def health():
             'patches': PATCH_STATUS}
 
 
+def _vtuple(v: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r'\d+', str(v))[:4])
+
+
 @app.get('/api/musicdl/latest')
 def musicdllatest():
     '''check PyPI for the newest musicdl (read-only; never installs anything)'''
@@ -427,9 +431,59 @@ def musicdllatest():
         r = pyrequests.get('https://pypi.org/pypi/musicdl/json', timeout=8)
         r.raise_for_status()
         latest = r.json()['info']['version']
-        return {'current': MUSICDL_VERSION, 'latest': latest, 'update_available': latest != MUSICDL_VERSION}
+        return {'current': MUSICDL_VERSION, 'latest': latest,
+                'update_available': _vtuple(latest) > _vtuple(MUSICDL_VERSION)}
     except Exception as err:
         raise HTTPException(502, f'查询 PyPI 失败: {err}')
+
+
+# --- in-app upgrade: pip install -U musicdl, then restart to load it ---------
+UPDATE_STATE = {'running': False, 'ok': None, 'detail': '', 'to': None}
+
+
+def _runupdate():
+    import subprocess
+    try:
+        proc = subprocess.run([sys.executable, '-m', 'pip', 'install', '-U', 'musicdl'],
+                              capture_output=True, text=True, timeout=600)
+        out = ((proc.stdout or '') + (proc.stderr or '')).strip()
+        if proc.returncode != 0:
+            UPDATE_STATE.update(ok=False, detail=out[-500:] or f'pip 退出码 {proc.returncode}')
+        else:
+            try:
+                from importlib.metadata import version as _pkgver
+                newv = _pkgver('musicdl')
+            except Exception:
+                newv = None
+            UPDATE_STATE.update(ok=True, to=newv)
+        pushlog('info', f'musicdl 升级: ok={UPDATE_STATE["ok"]} to={UPDATE_STATE["to"]}')
+    except Exception as err:
+        UPDATE_STATE.update(ok=False, detail=str(err))
+    finally:
+        UPDATE_STATE['running'] = False
+
+
+@app.post('/api/musicdl/update')
+def musicdlupdate():
+    '''upgrade musicdl in the background (new version loads after restart)'''
+    if UPDATE_STATE['running']:
+        return {'started': False, 'running': True}
+    UPDATE_STATE.update(running=True, ok=None, detail='', to=None)
+    threading.Thread(target=_runupdate, daemon=True).start()
+    return {'started': True}
+
+
+@app.get('/api/musicdl/update')
+def musicdlupdatestatus():
+    return dict(UPDATE_STATE, current=MUSICDL_VERSION)
+
+
+@app.post('/api/restart')
+def restartserver():
+    '''exit with code 88; start.bat / start.sh loop on 88, Docker restart policy revives'''
+    pushlog('info', '收到重启请求，1 秒后重启…')
+    threading.Timer(1.0, lambda: os._exit(88)).start()
+    return {'ok': True}
 
 
 @app.get('/api/config')
@@ -650,10 +704,11 @@ def runtask(task_id: str):
     client = manager.client
     entries = task['songs']
     valid = [e for e in entries if e['_song'] is not None and e['_song'].source in client.music_clients]
+    valid_ids = {id(e) for e in valid}  # identity, not dict equality (同曲可重复入队)
     for e in entries:
         if e['_song'] is None:
             e['status'], e['detail'] = 'failed', '结果已过期'
-        elif e not in valid:
+        elif id(e) not in valid_ids:
             e['status'], e['detail'] = 'failed', '对应音源已被禁用'
         else:
             e['status'] = 'running'
@@ -707,6 +762,9 @@ def download(body: DownloadBody):
         })
     TASKS[task_id] = {'id': task_id, 'status': 'pending', 'created_at': time.strftime('%H:%M:%S'), 'finished_at': None, 'songs': songs}
     TASK_ORDER.insert(0, task_id)
+    # 防内存无限增长：任务记录最多留 200 条，旧的先丢
+    while len(TASK_ORDER) > 200:
+        TASKS.pop(TASK_ORDER.pop(), None)
     threading.Thread(target=runtask, args=(task_id,), daemon=True).start()
     return {'task_id': task_id}
 
