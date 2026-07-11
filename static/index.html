@@ -843,14 +843,6 @@
               <option value="all">全部音质</option>
               <option value="lossless">仅无损</option>
             </select>
-            <select id="search-sort-select" class="sort-select" title="排序方式" style="flex:1; min-width:110px;">
-              <option value="default">默认混排</option>
-              <option value="quality">按品质排序</option>
-              <option value="size">按体积排序</option>
-            </select>
-            <button id="search-sort-dir-btn" class="playmode-btn ripple-target" title="升/降序" data-dir="desc" style="display:none;">
-              <span id="search-sort-dir-glyph" style="font-weight:800;font-size:14px">↓</span>
-            </button>
           </div>
 
           <div class="search-stats">
@@ -959,6 +951,7 @@
                   <option value="source">按音源</option>
                   <option value="duration">按时长</option>
                   <option value="size">按大小</option>
+                  <option value="quality">按品质</option>
                 </select>
                 <button id="sort-dir-btn" class="playmode-btn ripple-target" title="升序 / 降序" data-dir="asc"><span id="sort-dir-glyph" style="font-weight:800;font-size:14px">↑</span></button>
                 <button class="playmode-btn active ripple-target" data-mode="list" title="列表循环"><svg class="ic"><use href="#i-repeat"/></svg></button>
@@ -1451,8 +1444,6 @@
       sortBy:'default',
       sortDir:'asc',
       searchFilterQuality:'all',
-      searchSortBy:'default',
-      searchSortDir:'desc',
       batchPicked:new Set()
     };
 
@@ -2670,6 +2661,12 @@
       const cmp=(a,b)=>{
         if(key==='duration') return (durationToSec(a.duration)-durationToSec(b.duration))*dir;
         if(key==='size') return (sizeToBytes(a.fileSize)-sizeToBytes(b.fileSize))*dir;
+        if(key==='quality') {
+          const qa = getSearchQualityScore(a);
+          const qb = getSearchQualityScore(b);
+          if (qa !== qb) return (qa - qb) * dir;
+          return (sizeToBytes(a.fileSize) - sizeToBytes(b.fileSize)) * dir;
+        }
         const va=String((key==='title'?a.title:key==='artist'?a.artist:sourceLabel(a.source))||'');
         const vb=String((key==='title'?b.title:key==='artist'?b.artist:sourceLabel(b.source))||'');
         return va.localeCompare(vb,'zh-Hans-CN')*dir;
@@ -3023,22 +3020,6 @@
       if (searchFilterQualityEl) {
         searchFilterQualityEl.addEventListener('change', () => {
           state.searchFilterQuality = searchFilterQualityEl.value;
-          renderMiniSearchList();
-          renderPlaylistList();
-        });
-      }
-      if (searchSortSelectEl) {
-        searchSortSelectEl.addEventListener('change', () => {
-          state.searchSortBy = searchSortSelectEl.value;
-          searchSortDirBtnEl.style.display = (state.searchSortBy !== 'default') ? 'block' : 'none';
-          renderMiniSearchList();
-          renderPlaylistList();
-        });
-      }
-      if (searchSortDirBtnEl) {
-        searchSortDirBtnEl.addEventListener('click', () => {
-          state.searchSortDir = state.searchSortDir === 'desc' ? 'asc' : 'desc';
-          document.getElementById('search-sort-dir-glyph').textContent = state.searchSortDir === 'desc' ? '↓' : '↑';
           renderMiniSearchList();
           renderPlaylistList();
         });
@@ -3464,21 +3445,6 @@
       let out = _originalGetInterleavedSearchList();
       if (state.searchFilterQuality === 'lossless') {
         out = out.filter(t => t.quality === 'lossless' || getSearchQualityScore(t) === 1000);
-      }
-      if (state.searchSortBy !== 'default') {
-        const dir = state.searchSortDir === 'desc' ? -1 : 1;
-        out.sort((a, b) => {
-          if (state.searchSortBy === 'size') {
-            return (sizeToBytes(a.fileSize) - sizeToBytes(b.fileSize)) * dir;
-          }
-          if (state.searchSortBy === 'quality') {
-            const qa = getSearchQualityScore(a);
-            const qb = getSearchQualityScore(b);
-            if (qa !== qb) return (qa - qb) * dir;
-            return (sizeToBytes(a.fileSize) - sizeToBytes(b.fileSize)) * dir;
-          }
-          return 0;
-        });
       }
       return out;
     };
