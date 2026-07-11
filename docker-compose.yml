@@ -17,6 +17,9 @@ services:
       - MUSICDL_WORKDIR=/music
       - MUSICDL_CONFIG=/data/config.json
       # - HTTP_PROXY=http://host.docker.internal:7890   # 需要代理时打开
+      # 可选：如果希望开启网页登录验证，取消下方注释并设置账号密码
+      # - MUSICDL_USER=admin
+      # - MUSICDL_PASS=your_password
 
   # —— 可选：同一个 ./music 目录挂给 navidrome，下载即入库 ——
   # navidrome:

@@ -24,9 +24,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests as pyrequests
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import secrets
 
 # silence rich live progress rendering (musicdl uses it heavily; useless in a
 # server console). Guarded so a rich/musicdl change can't stop the app booting.
@@ -351,6 +352,40 @@ def serializesong(sid: str, song) -> dict:
 
 app = FastAPI(title='musicdl WebUI')
 
+AUTH_USER = os.environ.get('MUSICDL_USER')
+AUTH_PASS = os.environ.get('MUSICDL_PASS')
+AUTH_ENABLED = bool(AUTH_USER and AUTH_PASS)
+
+if AUTH_ENABLED:
+    @app.middleware("http")
+    async def auth_middleware(request: Request, call_next):
+        # 仅拦截 /api/ 开头的真实数据请求，且放行登录/登出接口
+        if request.url.path.startswith("/api/") and request.url.path not in ["/api/auth/login", "/api/auth/logout"]:
+            auth_cookie = request.cookies.get("musicdl_auth")
+            if not auth_cookie or auth_cookie != f"{AUTH_USER}:{AUTH_PASS}":
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized. Please login."})
+        
+        # 对于 HTML、图片等静态资源请求（甚至是反向代理的任意子路径），一律放行。
+        # 页面加载后，前端 js 会发起 /api/ 请求，届时拿到 401 再弹出 UI 登录框，这样最安全且兼容性最好。
+        return await call_next(request)
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+@app.post("/api/auth/login")
+async def login(body: LoginBody, response: Response):
+    if not AUTH_ENABLED:
+        return {"success": True}
+    if secrets.compare_digest(body.username, AUTH_USER) and secrets.compare_digest(body.password, AUTH_PASS):
+        response.set_cookie(key="musicdl_auth", value=f"{AUTH_USER}:{AUTH_PASS}", httponly=True, max_age=86400 * 30)
+        return {"success": True}
+    raise HTTPException(status_code=401, detail="Invalid username or password")
+
+@app.post("/api/auth/logout")
+async def logout(response: Response):
+    response.delete_cookie(key="musicdl_auth")
+    return {"success": True}
 
 @app.on_event('startup')
 async def raisethreadpool():

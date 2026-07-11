@@ -5,6 +5,7 @@
   <title>我的音乐站 · musicdl</title>
   <meta name="referrer" content="no-referrer" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎧</text></svg>">
   <!-- 圆润可爱字体 -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,7 +59,7 @@
     /* ===== 内联 SVG 图标 ===== */
     .ic {
       width: 1.15em; height: 1.15em;
-      fill: none; stroke: currentColor;
+      fill: none; stroke: currentColor; overflow: visible;
       stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
       display: inline-block; vertical-align: -0.22em; flex-shrink: 0;
     }
@@ -716,6 +717,35 @@
       .volume-slider { width: 76px; }
       .shortcut-toggle-btn { width: 34px; height: 34px; }
     }
+    #login-overlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: var(--bg); display: flex; align-items: center; justify-content: center;
+      opacity: 1; transition: opacity .3s;
+    }
+    #login-overlay.hidden { opacity: 0; pointer-events: none; }
+    .login-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow-lg);
+      padding: 30px; width: 340px; text-align: center;
+      display: flex; flex-direction: column; gap: 20px;
+      position: relative; z-index: 10;
+    }
+    .login-card .pikachu-box { margin: 0 auto; width: 64px; height: 64px; border-radius: 20px; }
+    .login-card h2 { margin: 0; font-family: "Baloo 2", "Nunito", sans-serif; font-size: 24px; color: var(--text-main); }
+    .login-card input {
+      width: 100%; padding: 12px 14px; border: 1px solid var(--border);
+      border-radius: var(--radius-sm); font-size: 14px; font-family: inherit;
+      background: var(--bg); transition: border-color .2s; outline: none; color: var(--text-main);
+    }
+    .login-card input:focus { border-color: var(--accent); background: #fff; }
+    .login-card button {
+      width: 100%; padding: 12px; border: none; border-radius: var(--radius-sm);
+      background: var(--accent); color: #fff; font-size: 15px; font-weight: 600;
+      cursor: pointer; transition: background .2s, transform .1s;
+    }
+    .login-card button:hover { background: var(--accent-deep); }
+    .login-card button:active { transform: scale(0.98); }
+    .login-error { color: var(--accent-red); font-size: 13px; margin: 0; display: none; }
   </style>
 </head>
 <body>
@@ -723,7 +753,8 @@
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
     <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><rect x="3" y="14" width="4" height="7" rx="2"/><rect x="17" y="14" width="4" height="7" rx="2"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
-    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V15z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
     <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6"/></symbol>
     <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7Z"/></symbol>
@@ -769,6 +800,7 @@
         <button id="shortcut-toggle-btn" class="shortcut-toggle-btn ripple-target" title="快捷键说明"><svg class="ic"><use href="#i-keyboard"/></svg></button>
         <button id="downloads-toggle-btn" class="shortcut-toggle-btn ripple-target" title="下载管理 / 日志"><svg class="ic"><use href="#i-download"/></svg></button>
         <button id="settings-toggle-btn" class="shortcut-toggle-btn ripple-target" title="设置"><svg class="ic"><use href="#i-settings"/></svg></button>
+        <button id="logout-btn" class="shortcut-toggle-btn ripple-target" title="退出登录" onclick="doLogout()"><svg class="ic"><use href="#i-logout"/></svg></button>
       </div>
     </header>
 
@@ -3154,9 +3186,27 @@
     // ===================================================================
 
     const API={
-      async get(p){const r=await fetch(p);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);return r.json();},
-      async send(p,body,method,opts){const r=await fetch(p,{method:method||'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:opts&&opts.signal});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);return r.json();}
+      async get(p){const r=await fetch(p);if(r.status===401){showLoginModal();throw new Error("Unauthorized");}if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);return r.json();},
+      async send(p,body,method,opts){const r=await fetch(p,{method:method||'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:opts&&opts.signal});if(r.status===401){showLoginModal();throw new Error("Unauthorized");}if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);return r.json();}
     };
+    function showLoginModal() { document.getElementById('login-overlay').classList.remove('hidden'); }
+    window.doLogin = async function() {
+      const u=document.getElementById('login-user').value, p=document.getElementById('login-pass').value;
+      const err=document.getElementById('login-error'); err.style.display='none';
+      try {
+        const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+        if(r.ok) { document.getElementById('login-overlay').classList.add('hidden'); window.location.reload(); }
+        else err.style.display='block';
+      } catch(e) { err.style.display='block'; }
+    }
+    window.doLogout = function() {
+      document.getElementById('logout-confirm-modal').classList.add('show');
+    }
+    window.doLogoutConfirm = async function() {
+      document.getElementById('logout-confirm-modal').classList.remove('show');
+      try { await fetch('/api/auth/logout', {method:'POST'}); } catch(e) {}
+      window.location.reload();
+    }
     let META=null, CONFIG=null;
     const SW_KEYS=['auto_set_proxies','random_update_ua','maintain_session','strict_limit_search_size_per_page','enable_search_curl_cffi','enable_parse_curl_cffi','enable_download_curl_cffi'];
     const SOURCE_PALETTE=['#ff6b6b','#4dd0e1','#ba68c8','#65f7c4','#ffb74d','#4ac8ff','#f06292','#aed581','#ffd54f','#9575cd','#4db6ac','#ff8a65','#7986cb','#dce775','#f48fb1','#81d4fa'];
@@ -3753,11 +3803,31 @@
       renderPlaylistList();
       setPlaymodeUI();
       dom.audio.volume=parseFloat(dom.volumeSlider.value);
-      loadBackend().catch(e=>{ console.error(e); showToast('后端连接失败: '+e.message); });
+      loadBackend().catch(e=>{ console.error(e); if(e.message!=='Unauthorized') showToast('后端连接失败: '+e.message); });
     }
 
     document.addEventListener('DOMContentLoaded',init);
   })();
   </script>
+  <div id="login-overlay" class="hidden">
+    <div id="bg-canvas"></div>
+    <div class="login-card">
+      <div class="pikachu-box"><img src="pikachu.gif" class="pikachu-img" alt="logo"></div>
+      <h2>Login to musicdl</h2>
+      <input type="text" id="login-user" placeholder="Username" autocomplete="username">
+      <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()">
+      <p id="login-error" class="login-error">Invalid username or password</p>
+      <button onclick="doLogin()">Sign In</button>
+    </div>
+  </div>
+  <div id="logout-confirm-modal" class="modal-backdrop" onclick="if(event.target===this)this.classList.remove('show')">
+    <div class="modal ripple-target" style="width: 320px; text-align: center; margin: auto;">
+      <div style="margin-bottom: 20px; margin-top: 10px; font-size: 1.1rem; color: var(--text-color);" data-i18n="logoutConfirm">确定要退出登录吗？</div>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button class="btn btn-ghost ripple-target" onclick="document.getElementById('logout-confirm-modal').classList.remove('show')" data-i18n="logoutCancel">取消</button>
+        <button class="btn btn-primary ripple-target" onclick="doLogoutConfirm()" data-i18n="logoutOk">确定退出</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
