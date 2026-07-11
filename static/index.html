@@ -3285,8 +3285,10 @@
     }
 
     async function queueTracks(list){
-      await Promise.all(list.map(track=>ensureBackendId(track,false)));
-      try{return await API.send('/api/download',{ids:list.map(track=>track.backendId)});}
+      await Promise.all(list.map(track=>ensureBackendId(track,false).catch(e=>null)));
+      let ids = list.map(t=>t.backendId).filter(id=>id);
+      if(!ids.length) throw new Error(state.language==='zh'?'没有可下载的歌曲':'No available songs');
+      try{return await API.send('/api/download',{ids:ids});}
       catch(e){
         if(e.status!==404)throw e;
         let resolved = 0;
@@ -3296,11 +3298,16 @@
           if (list.length > 1) {
             showToast((state.language==='zh'?'正在解析恢复: ':'Resolving: ') + resolved + ' / ' + list.length);
           }
-          await Promise.all(chunk.map(track=>ensureBackendId(track, true)));
+          await Promise.all(chunk.map(track=>ensureBackendId(track, true).catch(err=>{
+            console.warn('Track resolve failed:', track.title, err);
+            track.backendId = null;
+          })));
           resolved += chunk.length;
         }
+        const finalIds = list.map(t=>t.backendId).filter(id=>id);
+        if(!finalIds.length) throw new Error(state.language==='zh'?'选中的歌曲均无法解析失效':'All selected songs failed to resolve');
         if (list.length > 1) showToast((state.language==='zh'?'解析完成，正在提交...':'Resolved, submitting...'));
-        return API.send('/api/download',{ids:list.map(track=>track.backendId)});
+        return API.send('/api/download',{ids:finalIds});
       }
     }
 
