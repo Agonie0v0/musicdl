@@ -838,6 +838,21 @@
             </button>
           </div>
 
+          <div class="search-filter-row" style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+            <select id="search-filter-quality" class="sort-select" title="音质筛选" style="flex:1; min-width:100px;">
+              <option value="all">全部音质</option>
+              <option value="lossless">仅无损</option>
+            </select>
+            <select id="search-sort-select" class="sort-select" title="排序方式" style="flex:1; min-width:110px;">
+              <option value="default">默认混排</option>
+              <option value="quality">按品质排序</option>
+              <option value="size">按体积排序</option>
+            </select>
+            <button id="search-sort-dir-btn" class="playmode-btn ripple-target" title="升/降序" data-dir="desc" style="display:none;">
+              <span id="search-sort-dir-glyph" style="font-weight:800;font-size:14px">↓</span>
+            </button>
+          </div>
+
           <div class="search-stats">
             <span id="search-status" data-i18n="searchStatusIdle">尚未搜索，试试输入“林俊杰”？</span>
             <span id="search-count">0</span>
@@ -1435,6 +1450,9 @@
       muted:false,
       sortBy:'default',
       sortDir:'asc',
+      searchFilterQuality:'all',
+      searchSortBy:'default',
+      searchSortDir:'desc',
       batchPicked:new Set()
     };
 
@@ -2998,6 +3016,34 @@
         state.perSourceLimit=parseInt(dom.limitSelect.value,10)||10;
       });
 
+      const searchFilterQualityEl = document.getElementById('search-filter-quality');
+      const searchSortSelectEl = document.getElementById('search-sort-select');
+      const searchSortDirBtnEl = document.getElementById('search-sort-dir-btn');
+      
+      if (searchFilterQualityEl) {
+        searchFilterQualityEl.addEventListener('change', () => {
+          state.searchFilterQuality = searchFilterQualityEl.value;
+          renderMiniSearchList();
+          renderPlaylistList();
+        });
+      }
+      if (searchSortSelectEl) {
+        searchSortSelectEl.addEventListener('change', () => {
+          state.searchSortBy = searchSortSelectEl.value;
+          searchSortDirBtnEl.style.display = (state.searchSortBy !== 'default') ? 'block' : 'none';
+          renderMiniSearchList();
+          renderPlaylistList();
+        });
+      }
+      if (searchSortDirBtnEl) {
+        searchSortDirBtnEl.addEventListener('click', () => {
+          state.searchSortDir = state.searchSortDir === 'desc' ? 'asc' : 'desc';
+          document.getElementById('search-sort-dir-glyph').textContent = state.searchSortDir === 'desc' ? '↓' : '↑';
+          renderMiniSearchList();
+          renderPlaylistList();
+        });
+      }
+
       dom.loadMoreBtn.addEventListener('click',()=>{
         const enabled=Object.keys(state.enabledSources).filter(k=>state.enabledSources[k]);
         if(!enabled.length){showToast(t('searchStatusNoSource'));return;}
@@ -3402,6 +3448,40 @@
       }
       return out;
     }
+
+    function getSearchQualityScore(track) {
+      if (track.quality === 'lossless') return 1000;
+      const ext = String(track.ext || '').toLowerCase();
+      if (['flac', 'ape', 'wav', 'alac'].includes(ext)) return 1000;
+      if (ext === 'ogg') return 800;
+      if (ext === 'm4a') return 600;
+      if (ext === 'mp3') return 400;
+      return 0;
+    }
+
+    const _originalGetInterleavedSearchList = getInterleavedSearchList;
+    getInterleavedSearchList = function() {
+      let out = _originalGetInterleavedSearchList();
+      if (state.searchFilterQuality === 'lossless') {
+        out = out.filter(t => t.quality === 'lossless' || getSearchQualityScore(t) === 1000);
+      }
+      if (state.searchSortBy !== 'default') {
+        const dir = state.searchSortDir === 'desc' ? -1 : 1;
+        out.sort((a, b) => {
+          if (state.searchSortBy === 'size') {
+            return (sizeToBytes(a.fileSize) - sizeToBytes(b.fileSize)) * dir;
+          }
+          if (state.searchSortBy === 'quality') {
+            const qa = getSearchQualityScore(a);
+            const qb = getSearchQualityScore(b);
+            if (qa !== qb) return (qa - qb) * dir;
+            return (sizeToBytes(a.fileSize) - sizeToBytes(b.fileSize)) * dir;
+          }
+          return 0;
+        });
+      }
+      return out;
+    };
 
     function searchAllSources(reset){
       if(!state.searchKeyword){showToast(t('toastNeedKeyword'));return;}
