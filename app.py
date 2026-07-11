@@ -1061,9 +1061,14 @@ def download(body: DownloadBody):
         })
     task = {'id': task_id, 'status': 'pending', 'created_at': time.strftime('%H:%M:%S'), 'finished_at': None, 'songs': songs}
     with TASK_LOCK:
-        duplicate = [sid for sid in ids if sid in ACTIVE_SONG_IDS]
-        if duplicate:
-            raise HTTPException(409, '所选歌曲已有下载任务正在进行')
+        new_ids = [sid for sid in ids if sid not in ACTIVE_SONG_IDS]
+        if not new_ids:
+            raise HTTPException(409, '所选歌曲均已有下载任务正在进行')
+        # Update ids and songs list to only include new_ids
+        ids = new_ids
+        songs = [s for s in songs if s['id'] in new_ids]
+        task['songs'] = songs
+        
         _trim_finished_tasks_locked(limit=199)
         if len(TASK_ORDER) >= 200:
             raise HTTPException(503, '活动任务过多，请稍后再试')
