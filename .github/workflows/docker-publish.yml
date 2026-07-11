@@ -32,4 +32,4 @@ jobs:
           context: .
           push: true
           provenance: false
-          tags: ghcr.io/${{ github.repository_owner }}/musicdl:latest
+          tags: ghcr.io/agonie0v0/musicdl:latest
