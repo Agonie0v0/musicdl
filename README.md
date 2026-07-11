@@ -61,18 +61,28 @@ start.bat
 ### 1. 拿到代码
 
 ```bash
-git clone https://github.com/SAGIRIxr/musicdl-webui.git
-cd musicdl-webui
+git clone https://github.com/Agonie0v0/musicdl.git
+cd musicdl
 ```
 
 （群晖没装 git 的话，可在 GitHub 页面 *Code → Download ZIP* 下载解压，再进入该目录。）
 
 ### 2. 准备目录
 
-仓库里的 `docker-compose.yml` 默认会用到两个相对目录，先建好：
+仓库里的 `docker-compose.yml` 默认会用到两个相对目录，并强制设置网页登录凭据：
 
 ```bash
 mkdir -p music data
+chown -R 10001:10001 music data
+umask 077
+cat > .env <<'EOF'
+MUSICDL_USER=admin
+MUSICDL_PASS=请替换为至少16位的随机密码
+MUSICDL_TRUSTED_HOSTS=music.example.com,localhost,127.0.0.1
+MUSICDL_BIND=127.0.0.1
+MUSICDL_COOKIE_SECURE=1
+EOF
+chmod 600 .env
 ```
 
 - `music/`：**下载目录**，也就是你的音乐库。想让 navidrome 收录，就把它指到 navidrome
@@ -87,7 +97,21 @@ docker compose up -d --build
 ```
 
 - 首次会本地构建镜像（装 ffmpeg + 依赖），约 3–5 分钟，之后启动是秒级。
-- 起来后浏览器访问 **`http://<服务器IP>:8765`**（本机就是 `http://127.0.0.1:8765`）。
+- 默认只监听宿主机 `127.0.0.1:8765`，请通过 Caddy / Nginx 等 HTTPS 反向代理访问。
+- `MUSICDL_COOKIE_SECURE=1` 时浏览器只会通过 HTTPS 携带登录会话，这是服务器部署的推荐设置。
+- 仅在服务器本机测试时可访问 `http://127.0.0.1:8765`；不要把无 TLS 的 8765 端口直接暴露到公网。
+
+#### 使用 Lucky 等反向代理
+
+- Lucky 负责外部 HTTPS 与证书，回源填写 `http://127.0.0.1:8765` 即可，后端不需要再次配置 TLS。
+- `.env` 保持 `MUSICDL_COOKIE_SECURE=1`，并把外部域名加入 `MUSICDL_TRUSTED_HOSTS`，例如
+  `music.example.com,localhost,127.0.0.1`。反向代理应保留原始 `Host`；即使 Lucky 把它改写为
+  `127.0.0.1`，上述默认列表也能接受。
+- 不要通过普通 HTTP 域名访问：Secure 会话 Cookie 不会经 HTTP 发送，表现会像登录后立即回到登录页。本机临时 HTTP
+  测试才可短暂设置 `MUSICDL_COOKIE_SECURE=0`。
+- 如果 Lucky 直接运行在宿主机或使用 host 网络，回源 `127.0.0.1:8765` 正常；如果 Lucky 位于独立的
+  Docker bridge 网络，容器内的 `127.0.0.1` 是 Lucky 自身，应把两个服务接入同一 Docker 网络，并以
+  `http://musicdl-webui:8765` 回源，不要为了图方便把 8765 无保护地暴露到公网。
 
 看日志 / 状态：
 
@@ -133,7 +157,14 @@ git pull && docker compose up -d --build   # 更新到最新版（拉代码 → 
 | `MUSICDL_HOST` | `0.0.0.0` | 容器内监听地址，一般不用动 |
 | `MUSICDL_PORT` | `8765` | 服务端口（改了记得同步改 `ports` 映射） |
 | `MUSICDL_WORKDIR` | `/music` | 下载目录（容器内路径） |
+| `MUSICDL_FILE_ROOT` | `/music` | 文件管理器允许访问的固定根目录 |
 | `MUSICDL_CONFIG` | `/data/config.json` | 配置文件路径 |
+| `MUSICDL_USER` / `MUSICDL_PASS` | 必填 | Web 登录账号与密码，缺少任一项会拒绝启动 |
+| `MUSICDL_TRUSTED_HOSTS` | 必填 | 允许的访问域名，逗号分隔；须包含反代域名及 `localhost,127.0.0.1` |
+| `MUSICDL_BIND` | `127.0.0.1` | Compose 在宿主机的绑定地址 |
+| `MUSICDL_HOST_PORT` | `8765` | Compose 映射到宿主机的端口；可在多实例或端口冲突时修改 |
+| `MUSICDL_COOKIE_SECURE` | `1` | 服务器必须保持为 1，并通过 HTTPS 访问 |
+| `MUSICDL_PLAYLIST_HOSTS` | 无 | 逗号分隔的额外歌单域名后缀；默认只允许常见音乐平台 |
 | `HTTP_PROXY` / `HTTPS_PROXY` | 无 | 需要科学上网访问某些音源时设置 |
 
 ### 7. 不用 compose，直接 `docker run`
@@ -141,18 +172,21 @@ git pull && docker compose up -d --build   # 更新到最新版（拉代码 → 
 ```bash
 docker build -t musicdl-webui .
 docker run -d --name musicdl-webui --restart unless-stopped \
-  -p 8765:8765 \
+  -p 127.0.0.1:8765:8765 \
   -v "$PWD/music:/music" \
   -v "$PWD/data:/data" \
+  -e MUSICDL_USER=admin \
+  -e MUSICDL_PASS='请替换为随机密码' \
+  -e MUSICDL_TRUSTED_HOSTS='music.example.com,localhost,127.0.0.1' \
   musicdl-webui
 ```
 
 ### 常见问题
 
-- **端口被占用**：把 `-p 8765:8765` 或 compose 里的 `ports` 改成 `18765:8765`，
-  再用 `http://<IP>:18765` 访问。
-- **下载的文件在宿主机没权限 / navidrome 读不到**：给 `music/` 目录放开权限
-  `chmod -R 777 music`（或按需设 owner）。群晖建议把 `./music` 换成共享文件夹的
+- **端口被占用**：直接运行时把 `-p 127.0.0.1:8765:8765` 改成 `-p 127.0.0.1:18765:8765`；
+  Compose 部署则在 `.env` 设置 `MUSICDL_HOST_PORT=18765`，再通过对应反向代理访问。
+- **下载的文件在宿主机没权限 / navidrome 读不到**：镜像使用 UID/GID `10001:10001`，请执行
+  `chown -R 10001:10001 music data`，再按需给 navidrome 所在组授予只读权限；不要使用 `777`。群晖建议把 `./music` 换成共享文件夹的
   绝对路径，如 `/volume1/music:/music`。
 - **某些音源搜不出来**：多为需要代理，按第 6 节设 `HTTP_PROXY`；
   群晖代理常写 `http://<宿主机IP>:7890`（不要用 `127.0.0.1`，容器内的 127 是它自己）。
@@ -228,8 +262,8 @@ patch 了一些 musicdl 内部方法。这些 patch 全部做了**兼容保护**
 
 | 场景 | 操作 |
 |---|---|
-| **网页一键（推荐）** | 设置 → 关于 musicdl 引擎 → **一键升级并重启**，自动完成升级+重启+刷新页面 |
-| Docker / NAS | `docker compose up -d --build`（重建即拉最新 musicdl） |
+| 本地网页一键 | 设置 → 关于 musicdl 引擎 → **一键升级并重启**；仅本地脚本部署默认启用 |
+| Docker / NAS | `docker compose build --pull --no-cache && docker compose up -d`；容器内运行时升级默认禁用 |
 | 本地手动 | `venv\Scripts\pip install -U musicdl`（Linux/mac：`venv/bin/pip install -U musicdl`） |
 | 本地自动 | 设环境变量 `MUSICDL_AUTO_UPDATE=1` 再运行 `start.bat` / `start.sh`，每次启动自动升 |
 | 想回退 | `pip install musicdl==2.13.1`，或把 `requirements.txt` 钉回某版本 |
@@ -248,7 +282,6 @@ patch 了一些 musicdl 内部方法。这些 patch 全部做了**兼容保护**
 ```
 app.py                  # FastAPI：搜索/流媒体代理/下载任务/文件/配置/缓存清理
 static/index.html       # musicsquare 界面 + musicdl 数据层改造
-static/index-v1-backup.html  # 第一版自研界面（备用）
 Dockerfile              # 容器镜像（含 ffmpeg）
 docker-compose.yml      # NAS/服务器一键部署，可挂 navidrome 库
 start.bat / start.sh    # Windows / Linux·macOS 启动脚本

@@ -6,4 +6,9 @@ config.json
 __pycache__/
 *.pyc
 .git/
-static/index-v1-backup.html
+.env
+.env.*
+tests/
+task_plan.md
+findings.md
+progress.md

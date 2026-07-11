@@ -5,21 +5,31 @@
 services:
   musicdl-webui:
     build: .
-    # image: ghcr.io/sagirixr/musicdl-webui:latest   # 若日后发布镜像可直接用
-    container_name: musicdl-webui
+    # image: ghcr.io/agonie0v0/musicdl:latest        # 私有 GHCR 镜像需先 docker login ghcr.io
     restart: unless-stopped
+    init: true
     ports:
-      - "8765:8765"
+      - "${MUSICDL_BIND:-127.0.0.1}:${MUSICDL_HOST_PORT:-8765}:8765"
     volumes:
       - ./music:/music        # 下载目录（=navidrome 音乐库，见下方）
       - ./data:/data          # 保存 config.json（音源/Cookie/代理等设置）
     environment:
-      - MUSICDL_WORKDIR=/music
-      - MUSICDL_CONFIG=/data/config.json
-      # - HTTP_PROXY=http://host.docker.internal:7890   # 需要代理时打开
-      # 可选：如果希望开启网页登录验证，取消下方注释并设置账号密码
-      # - MUSICDL_USER=admin
-      # - MUSICDL_PASS=your_password
+      MUSICDL_WORKDIR: /music
+      MUSICDL_FILE_ROOT: /music
+      MUSICDL_CONFIG: /data/config.json
+      MUSICDL_USER: "${MUSICDL_USER:?请在 .env 中设置 MUSICDL_USER}"
+      MUSICDL_PASS: "${MUSICDL_PASS:?请在 .env 中设置 MUSICDL_PASS}"
+      MUSICDL_TRUSTED_HOSTS: "${MUSICDL_TRUSTED_HOSTS:?请在 .env 中设置访问域名，并包含 localhost,127.0.0.1}"
+      MUSICDL_COOKIE_SECURE: "${MUSICDL_COOKIE_SECURE:-1}"
+      MUSICDL_ALLOW_SELF_UPDATE: "0"
+      # HTTP_PROXY: http://host.docker.internal:7890   # 需要代理时打开
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    stop_grace_period: 30s
 
   # —— 可选：同一个 ./music 目录挂给 navidrome，下载即入库 ——
   # navidrome:

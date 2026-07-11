@@ -6,3 +6,6 @@ __pycache__/
 music/
 data/
 navidrome-data/
+.env
+.env.*
+!.env.example

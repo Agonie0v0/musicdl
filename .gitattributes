@@ -1,0 +1,15 @@
+* text=auto
+*.py text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+.gitignore text eol=lf
+.dockerignore text eol=lf
+.env.example text eol=lf
+.gitattributes text eol=lf

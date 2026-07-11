@@ -722,7 +722,7 @@
       background: var(--bg); display: flex; align-items: center; justify-content: center;
       opacity: 1; transition: opacity .3s;
     }
-    #login-overlay.hidden { opacity: 0; pointer-events: none; }
+    #login-overlay.hidden, #login-overlay[hidden] { display: none !important; }
     .login-card {
       background: var(--card); border: 1px solid var(--border);
       border-radius: var(--radius); box-shadow: var(--shadow-lg);
@@ -800,7 +800,7 @@
         <button id="shortcut-toggle-btn" class="shortcut-toggle-btn ripple-target" title="快捷键说明"><svg class="ic"><use href="#i-keyboard"/></svg></button>
         <button id="downloads-toggle-btn" class="shortcut-toggle-btn ripple-target" title="下载管理 / 日志"><svg class="ic"><use href="#i-download"/></svg></button>
         <button id="settings-toggle-btn" class="shortcut-toggle-btn ripple-target" title="设置"><svg class="ic"><use href="#i-settings"/></svg></button>
-        <button id="logout-btn" class="shortcut-toggle-btn ripple-target" title="退出登录" onclick="doLogout()"><svg class="ic"><use href="#i-logout"/></svg></button>
+        <button id="logout-btn" class="shortcut-toggle-btn ripple-target" title="退出登录" onclick="doLogout()" hidden><svg class="ic"><use href="#i-logout"/></svg></button>
       </div>
     </header>
 
@@ -1318,7 +1318,10 @@
         modalNewPlaylistTitle:"新建歌单",
         modalNewPlaylistDesc:"给你的歌单取一个可爱的名字吧～",
         modalConfirm:"确定",
-        modalCancel:"取消"
+        modalCancel:"取消",
+        logoutConfirm:"确定要退出登录吗？",
+        logoutCancel:"取消",
+        logoutOk:"确定退出"
       },
       en: {
         appTitle:"My Music Hub",
@@ -1399,7 +1402,10 @@
         modalNewPlaylistTitle:"Create Playlist",
         modalNewPlaylistDesc:"Give your playlist a cute name!",
         modalConfirm:"Confirm",
-        modalCancel:"Cancel"
+        modalCancel:"Cancel",
+        logoutConfirm:"确定要退出登录吗？",
+        logoutCancel:"取消",
+        logoutOk:"确定退出"
       }
     };
 
@@ -1925,7 +1931,7 @@
       return added;
     }
 
-    const JOOX_TOKEN = 'f84ao9lMF_q7husBWRfgUw';
+    const JOOX_TOKEN = ''; // 遗留直连实现已禁用，不在前端保存凭证
     const JOOX_BR = 4;
 
     // JOOX 搜索
@@ -2346,10 +2352,14 @@
 
     // ===================== 收藏 / 播放 =====================
 
-    function isFavorite(track){
-      if(!track)return false;
-      return state.favorites.some(x=>x.uid===track.uid);
+    function sameTrack(a,b){
+      if(!a||!b)return false;
+      if(a.uid&&b.uid&&a.uid===b.uid)return true;
+      if(a.stableId&&b.stableId)return a.source===b.source&&a.stableId===b.stableId;
+      const norm=v=>String(v||'').trim().toLowerCase();
+      return a.source===b.source&&norm(a.title)===norm(b.title)&&norm(a.artist)===norm(b.artist);
     }
+    function isFavorite(track){return !!track&&state.favorites.some(x=>sameTrack(x,track));}
     function updateMainFavButton(){
       const tr=state.currentTrack;
       const active=isFavorite(tr);
@@ -2492,7 +2502,7 @@
 
     function toggleFavoriteCurrent(){
       const tr=state.currentTrack; if(!tr)return;
-      const i=state.favorites.findIndex(x=>x.uid===tr.uid);
+      const i=state.favorites.findIndex(x=>sameTrack(x,tr));
       if(i>=0){state.favorites.splice(i,1);showToast(t('toastRemovedFavorite'));}
       else{state.favorites.push(tr);showToast(t('toastAddedFavorite'));}
       saveLibraryToStorage();
@@ -2728,7 +2738,7 @@
             const i=visible.findIndex(x=>x.uid===track.uid);
             playFromList('results',i);
           }else if(activeTab==='favorites'){
-            const i=state.favorites.findIndex(x=>x.uid===track.uid);
+            const i=state.favorites.findIndex(x=>sameTrack(x,track));
             playFromList('favorites',i);
           }else{
             const plId=dom.playlistSelect.value;
@@ -2739,7 +2749,7 @@
         });
         fBtn.addEventListener('click',ev=>{
           ev.stopPropagation();
-          const i=state.favorites.findIndex(x=>x.uid===track.uid);
+          const i=state.favorites.findIndex(x=>sameTrack(x,track));
           if(i>=0){state.favorites.splice(i,1);showToast(t('toastRemovedFavorite'));}
           else{state.favorites.push(track);showToast(t('toastAddedFavorite'));}
           saveLibraryToStorage();
@@ -3127,6 +3137,7 @@
       });
 
       document.addEventListener('keydown',e=>{
+        if(!$('login-overlay').hidden)return;
         const tag=document.activeElement.tagName.toLowerCase();
         const typing=(tag==='input'||tag==='textarea');
         const playlistOpen=dom.playlistModal.classList.contains('show');
@@ -3185,29 +3196,46 @@
     // ============ musicdl 后端接管：以下函数覆盖上方同名实现 ============
     // ===================================================================
 
+    async function apiError(r){
+      const data=await r.json().catch(()=>({}));
+      const err=new Error(data.detail||r.statusText||'请求失败'); err.status=r.status; return err;
+    }
     const API={
-      async get(p){const r=await fetch(p);if(r.status===401){showLoginModal();throw new Error("Unauthorized");}if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);return r.json();},
-      async send(p,body,method,opts){const r=await fetch(p,{method:method||'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:opts&&opts.signal});if(r.status===401){showLoginModal();throw new Error("Unauthorized");}if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);return r.json();}
+      async get(p){const r=await fetch(p);if(r.status===401){showLoginModal();throw Object.assign(new Error('登录已失效'),{status:401});}if(!r.ok)throw await apiError(r);return r.json();},
+      async send(p,body,method,opts){const r=await fetch(p,{method:method||'POST',headers:{'Content-Type':'application/json','X-MusicDL-Request':'1'},body:JSON.stringify(body??{}),signal:opts&&opts.signal});if(r.status===401){showLoginModal();throw Object.assign(new Error('登录已失效'),{status:401});}if(!r.ok)throw await apiError(r);return r.json();}
     };
-    function showLoginModal() { document.getElementById('login-overlay').classList.remove('hidden'); }
+    function showLoginModal(){
+      const overlay=document.getElementById('login-overlay');
+      overlay.hidden=false; overlay.classList.remove('hidden');
+      const appRoot=document.querySelector('.app');
+      if(appRoot){appRoot.inert=true;appRoot.setAttribute('aria-hidden','true');}
+      setTimeout(()=>document.getElementById('login-user').focus(),0);
+    }
     window.doLogin = async function() {
       const u=document.getElementById('login-user').value, p=document.getElementById('login-pass').value;
-      const err=document.getElementById('login-error'); err.style.display='none';
+      const err=document.getElementById('login-error'), btn=document.getElementById('login-submit');
+      err.style.display='none'; btn.disabled=true; btn.textContent='登录中…';
       try {
-        const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
-        if(r.ok) { document.getElementById('login-overlay').classList.add('hidden'); window.location.reload(); }
-        else err.style.display='block';
-      } catch(e) { err.style.display='block'; }
+        const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-MusicDL-Request':'1'},body:JSON.stringify({username:u,password:p})});
+        if(!r.ok)throw await apiError(r);
+        window.location.reload();
+      } catch(e) {
+        err.textContent=e.status===429?'尝试次数过多，请 5 分钟后再试':(e.message||'登录失败，请稍后重试');
+        err.style.display='block'; document.getElementById('login-pass').select();
+      } finally { btn.disabled=false; btn.textContent='登录'; }
     }
     window.doLogout = function() {
       document.getElementById('logout-confirm-modal').classList.add('show');
     }
     window.doLogoutConfirm = async function() {
       document.getElementById('logout-confirm-modal').classList.remove('show');
-      try { await fetch('/api/auth/logout', {method:'POST'}); } catch(e) {}
-      window.location.reload();
+      try {
+        const r=await fetch('/api/auth/logout',{method:'POST',headers:{'Content-Type':'application/json','X-MusicDL-Request':'1'},body:'{}'});
+        if(!r.ok)throw await apiError(r);
+        window.location.reload();
+      } catch(e) { showToast('退出失败：'+(e.message||'请稍后重试')); }
     }
-    let META=null, CONFIG=null;
+    let META=null, CONFIG=null, UPDATE_INFO=null;
     const SW_KEYS=['auto_set_proxies','random_update_ua','maintain_session','strict_limit_search_size_per_page','enable_search_curl_cffi','enable_parse_curl_cffi','enable_download_curl_cffi'];
     const SOURCE_PALETTE=['#ff6b6b','#4dd0e1','#ba68c8','#65f7c4','#ffb74d','#4ac8ff','#f06292','#aed581','#ffd54f','#9575cd','#4db6ac','#ff8a65','#7986cb','#dce775','#f48fb1','#81d4fa'];
     const sourceColorMap={};
@@ -3219,17 +3247,36 @@
     function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
     function fmtSize(n){return n>1048576?(n/1048576).toFixed(1)+' MB':(n/1024).toFixed(0)+' KB';}
     function icon(n){return '<svg class="ic"><use href="#i-'+n+'"/></svg>';}
+    const pendingDownloads=new Set();
+
+    async function ensureBackendId(track,force){
+      if(track.backendId&&!force)return track.backendId;
+      const nd=await API.send('/api/resolve',{source:track.source,title:track.title||'',artist:track.artist||'',keyword:track.keyword||''});
+      track.backendId=nd.id;
+      if(nd.stable_id){track.stableId=nd.stable_id;track.uid=nd.source+'-'+nd.stable_id;}
+      return track.backendId;
+    }
+
+    async function queueTracks(list){
+      await Promise.all(list.map(track=>ensureBackendId(track,false)));
+      try{return await API.send('/api/download',{ids:list.map(track=>track.backendId)});}
+      catch(e){
+        if(e.status!==404)throw e;
+        await Promise.all(list.map(track=>ensureBackendId(track,true)));
+        return API.send('/api/download',{ids:list.map(track=>track.backendId)});
+      }
+    }
 
     // 列表行内下载：结果里同一首歌会有多个 格式/大小 版本，看音质徽标挑着下
     async function downloadTrackRow(track){
+      const key=track.uid||track.title;
+      if(pendingDownloads.has(key)){showToast('该歌曲正在加入下载队列');return;}
+      pendingDownloads.add(key);
       try{
-        if(!track.backendId){
-          const nd=await API.send('/api/resolve',{source:track.source,title:track.title||'',artist:track.artist||'',keyword:track.keyword||''});
-          track.backendId=nd.id;
-        }
-        await API.send('/api/download',{ids:[track.backendId]});
+        await queueTracks([track]);
         showToast((state.language==='zh'?'已加入下载：':'Queued: ')+(track.title||''));
       }catch(e){ showToast((state.language==='zh'?'下载失败: ':'Download failed: ')+e.message); }
+      finally{pendingDownloads.delete(key);}
     }
 
     // —— 批量下载（在“下载管理”弹窗内，勾选搜索结果 / 收藏一次性下载）——
@@ -3267,15 +3314,8 @@
       const btn=$('dl-batch-go'); btn.disabled=true;
       showToast((state.language==='zh'?'正在准备 ':'Preparing ')+list.length+(state.language==='zh'?' 首…':' songs…'));
       try{
-        const ids=await Promise.all(list.map(async tk=>{
-          if(!tk.backendId){
-            const nd=await API.send('/api/resolve',{source:tk.source,title:tk.title||'',artist:tk.artist||'',keyword:tk.keyword||''});
-            tk.backendId=nd.id;
-          }
-          return tk.backendId;
-        }));
-        await API.send('/api/download',{ids});
-        showToast((state.language==='zh'?'已加入下载队列：':'Queued ')+ids.length+(state.language==='zh'?' 首':' songs'));
+        await queueTracks(list);
+        showToast((state.language==='zh'?'已加入下载队列：':'Queued ')+list.length+(state.language==='zh'?' 首':' songs'));
         state.batchPicked.clear();
         renderBatchList();
         refreshDownloads();
@@ -3286,7 +3326,14 @@
     }
 
     async function loadBackend(){
-      [META,CONFIG]=await Promise.all([API.get('/api/meta'),API.get('/api/config')]);
+      META=await API.get('/api/meta');
+      [CONFIG,UPDATE_INFO]=await Promise.all([API.get('/api/config'),API.get('/api/musicdl/update')]);
+      $('logout-btn').hidden=!META.auth_enabled;
+      if(!UPDATE_INFO.enabled){
+        $('musicdl-upgrade').disabled=true;
+        $('musicdl-upgrade').title='容器部署请通过重建镜像升级';
+        $('musicdl-update').textContent='当前部署已禁用网页内升级，请通过重建镜像更新';
+      }
       Object.values(META.categories).flat().forEach(f=>sourceColor(shortName(f)));
       renderSourceChips();
       const sz=String(CONFIG.global_client_cfg.search_size_per_source??5);
@@ -3328,7 +3375,7 @@
 
     function trackFromBackend(s,displayIndex){
       return {
-        uid:s.source+'-'+s.id, backendId:s.id, source:s.source,
+        uid:s.source+'-'+(s.stable_id||s.id), stableId:s.stable_id||null, backendId:s.id, source:s.source,
         displayIndex:displayIndex||1, keyword:state.searchKeyword,
         songid:s.id, title:s.song_name||'', artist:s.singers||'', album:s.album||'',
         ext:s.ext||'', fileSize:s.file_size||'', duration:s.duration||'', episodes:s.episodes||0,
@@ -3429,13 +3476,16 @@
     }
 
     // —— 播放：覆盖以支持后端音源徽标 + FM 专辑自动展开剧集 ——
+    let playGeneration=0;
     async function playTrack(track,context){
       if(!track)return;
+      const generation=++playGeneration;
       // FM 类（喜马拉雅等）专辑：先展开剧集
       if(track.episodes&&track.episodes>0&&track.backendId){
         try{
           dom.playerStatus.textContent=state.language==='zh'?'展开剧集中…':'Loading episodes…';
           const eps=await API.get('/api/song/'+track.backendId+'/episodes');
+          if(generation!==playGeneration)return;
           const list=eps.results||[];
           if(list.length){
             track.episodes=0;
@@ -3478,30 +3528,32 @@
       updateMainFavButton();
       try{
         await ensureTrackDetails(track);
+        if(generation!==playGeneration)return;
         applyUI();
         state.lyricLines=track.lrc?parseLRC(track.lrc):[];
         renderLyrics();
         if(!track.audioUrl){dom.playerStatus.textContent=t('playerStatusIdle');return;}
         dom.audio.src=track.audioUrl;
         await dom.audio.play();
+        if(generation!==playGeneration)return;
         state.isPlaying=true;
         dom.playBtn.innerHTML=icon('pause');
         dom.playerStatus.textContent=t('playerStatusPlaying');
       }catch(e){
+        if(generation!==playGeneration)return;
         console.error(e);
         showToast(t('toastPlayError'));
         dom.playerStatus.textContent=t('playerStatusIdle');
       }
-      renderMiniSearchList();
-      renderPlaylistList();
+      if(generation===playGeneration){renderMiniSearchList();renderPlaylistList();}
     }
 
     // —— 下载：交给 musicdl 后端任务（自动写标签/歌词），文件在下载管理中查看 ——
     async function handleDownloadCurrent(){
       const tr=state.currentTrack;
-      if(!tr||!tr.backendId){showToast(t('toastDownloadNotReady'));return;}
+      if(!tr){showToast(t('toastDownloadNotReady'));return;}
       try{
-        await API.send('/api/download',{ids:[tr.backendId]});
+        await queueTracks([tr]);
         showToast(state.language==='zh'?'已加入下载任务，点右上角 ⬇️ 查看':'Download task created (see ⬇️)');
       }catch(e){ showToast((state.language==='zh'?'下载失败: ':'Download failed: ')+e.message); }
     }
@@ -3509,7 +3561,7 @@
     // —— 歌单/收藏序列化：保留可用于跨会话重新解析的字段 ——
     function serializeTrack(track){
       if(!track)return null;
-      const keys=['uid','source','displayIndex','keyword','songid','backendId','title','artist','album','ext','fileSize','duration','quality','qualityLabel'];
+      const keys=['uid','stableId','source','displayIndex','keyword','songid','title','artist','album','ext','fileSize','duration','quality','qualityLabel'];
       const out={};
       keys.forEach(k=>{ if(track[k]!==undefined&&track[k]!==null&&track[k]!=='')out[k]=track[k]; });
       out.detailsLoaded=false; out.audioUrl=null; out.lrc=null; out.lrcUrl=null; out.episodes=0;
@@ -3518,6 +3570,7 @@
     function deserializeTrack(raw){
       const track=serializeTrack(raw);
       if(!track)return null;
+      track.backendId=null;
       return track;
     }
 
@@ -3803,21 +3856,20 @@
       renderPlaylistList();
       setPlaymodeUI();
       dom.audio.volume=parseFloat(dom.volumeSlider.value);
-      loadBackend().catch(e=>{ console.error(e); if(e.message!=='Unauthorized') showToast('后端连接失败: '+e.message); });
+      loadBackend().catch(e=>{ if(e.status!==401){console.error(e);showToast('后端连接失败: '+e.message);} });
     }
 
     document.addEventListener('DOMContentLoaded',init);
   })();
   </script>
-  <div id="login-overlay" class="hidden">
-    <div id="bg-canvas"></div>
+  <div id="login-overlay" class="hidden" hidden role="dialog" aria-modal="true" aria-labelledby="login-title">
     <div class="login-card">
-      <div class="pikachu-box"><img src="pikachu.gif" class="pikachu-img" alt="logo"></div>
-      <h2>Login to musicdl</h2>
-      <input type="text" id="login-user" placeholder="Username" autocomplete="username">
-      <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()">
-      <p id="login-error" class="login-error">Invalid username or password</p>
-      <button onclick="doLogin()">Sign In</button>
+      <div class="pikachu-box"><img src="pikachu.gif" class="pikachu-img" alt="musicdl 标志"></div>
+      <h2 id="login-title">登录 musicdl</h2>
+      <input type="text" id="login-user" placeholder="用户名" aria-label="用户名" autocomplete="username">
+      <input type="password" id="login-pass" placeholder="密码" aria-label="密码" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()">
+      <p id="login-error" class="login-error" role="alert">用户名或密码错误</p>
+      <button id="login-submit" onclick="doLogin()">登录</button>
     </div>
   </div>
   <div id="logout-confirm-modal" class="modal-backdrop" onclick="if(event.target===this)this.classList.remove('show')">
