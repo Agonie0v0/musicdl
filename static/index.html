@@ -3289,7 +3289,17 @@
       try{return await API.send('/api/download',{ids:list.map(track=>track.backendId)});}
       catch(e){
         if(e.status!==404)throw e;
-        await Promise.all(list.map(track=>ensureBackendId(track,true)));
+        let resolved = 0;
+        const limit = 5;
+        for (let i = 0; i < list.length; i += limit) {
+          const chunk = list.slice(i, i + limit);
+          if (list.length > 1) {
+            showToast((state.language==='zh'?'正在解析恢复: ':'Resolving: ') + resolved + ' / ' + list.length);
+          }
+          await Promise.all(chunk.map(track=>ensureBackendId(track, true)));
+          resolved += chunk.length;
+        }
+        if (list.length > 1) showToast((state.language==='zh'?'解析完成，正在提交...':'Resolved, submitting...'));
         return API.send('/api/download',{ids:list.map(track=>track.backendId)});
       }
     }
