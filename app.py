@@ -603,6 +603,10 @@ class DownloadBody(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=100)
 
 
+class ValidateBody(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+
+
 class ConfigBody(BaseModel):
     music_sources: list[str]
     global_client_cfg: dict
@@ -1038,13 +1042,22 @@ def _download_future_done(task: dict, future):
             ACTIVE_SONG_IDS.discard(entry['id'])
 
 
+@app.post('/api/songs/validate')
+def validatesongs(body: ValidateBody):
+    '''批量检查哪些 id 已失效（服务重启后收藏里的旧 id）——一次调用，前端只重解析失效的'''
+    invalid = [sid for sid in dict.fromkeys(body.ids) if getsong(sid) is None]
+    return {'invalid': invalid}
+
+
 @app.post('/api/download')
 def download(body: DownloadBody):
     ids = list(dict.fromkeys(body.ids))
     songs_by_id = {sid: getsong(sid) for sid in ids}
-    missing = [sid for sid, song in songs_by_id.items() if song is None]
-    if missing:
-        raise HTTPException(404, '部分歌曲结果已过期，请重新解析后再下载')
+    # 失效的挑出来告知前端，不再因为个别失效把整批 404 掉
+    expired = [sid for sid, song in songs_by_id.items() if song is None]
+    ids = [sid for sid in ids if songs_by_id[sid] is not None]
+    if not ids:
+        raise HTTPException(404, '所选歌曲结果均已过期，请重新解析后再下载')
     try:
         manager.get()
     except Exception as err:
@@ -1077,7 +1090,7 @@ def download(body: DownloadBody):
         ACTIVE_SONG_IDS.update(ids)
     future = DOWNLOAD_EXECUTOR.submit(runtask, task_id, task)
     future.add_done_callback(lambda finished: _download_future_done(task, finished))
-    return {'task_id': task_id}
+    return {'task_id': task_id, 'queued': len(ids), 'expired': expired}
 
 
 @app.post('/api/tasks/clear-finished')

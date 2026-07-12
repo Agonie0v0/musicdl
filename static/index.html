@@ -600,25 +600,24 @@
     .dl-state.failed, .dl-state.partial { color: var(--accent-red); background: #ffeef0; border-color: rgba(239,77,94,.3); }
     .dl-empty { color: var(--text-faint); font-size: 12px; text-align: center; padding: 14px 0; font-weight: 600; }
 
-    /* 批量选择 */
-    /* 批量下载（下载管理弹窗内）*/
-    .dl-batch-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
-    .dl-btab {
-      font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 999px;
-      border: 1px solid var(--border); background: var(--card); color: var(--text-sub); cursor: pointer;
+    /* 批量选择（主界面播放列表内） */
+    .batch-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; margin: 0 14px 12px;
+      background: var(--accent-soft); border: 1px solid rgba(79,124,255,.28);
+      border-radius: 12px;
     }
-    .dl-btab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .dl-batch-list { max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; }
-    .dl-batch-row {
-      display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer;
-      border-bottom: 1px solid var(--border);
+    .batch-bar .btn { font-size: 12px; padding: 6px 12px; }
+    #batch-dl { background: linear-gradient(135deg, var(--accent), var(--accent-deep)); color: #fff; border: none; }
+    #batch-dl:hover { color: #fff; }
+    .batch-check {
+      width: 18px; height: 18px; flex-shrink: 0; cursor: pointer;
+      accent-color: var(--accent); margin-right: 2px; display: none;
     }
-    .dl-batch-row:last-child { border-bottom: none; }
-    .dl-batch-row:hover { background: var(--accent-soft); }
-    .dl-batch-row.picked { background: var(--accent-soft); }
-    .dl-batch-cb { width: 17px; height: 17px; flex-shrink: 0; cursor: pointer; accent-color: var(--accent); }
-    #dl-batch-go { background: linear-gradient(135deg, var(--accent), var(--accent-deep)); color: #fff; border: none; }
-    #dl-batch-go:hover { color: #fff; }
+    .batch-mode .batch-check { display: inline-block; }
+    .batch-mode .track-actions { display: none; }
+    .track-item.batch-picked { background: var(--accent-soft); border-color: rgba(79,124,255,.5); }
+    #batch-toggle-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
     /* 任务分组卡片 */
     .task-group { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; overflow: hidden; background: var(--card); }
     .task-group-head {
@@ -957,6 +956,7 @@
                 <button class="playmode-btn active ripple-target" data-mode="list" title="列表循环"><svg class="ic"><use href="#i-repeat"/></svg></button>
                 <button class="playmode-btn ripple-target" data-mode="single" title="单曲循环"><svg class="ic"><use href="#i-repeat1"/></svg></button>
                 <button class="playmode-btn ripple-target" data-mode="shuffle" title="随机播放"><svg class="ic"><use href="#i-shuffle"/></svg></button>
+                <button id="batch-toggle-btn" class="playmode-btn ripple-target" title="批量选择下载"><svg class="ic"><use href="#i-checksq"/></svg></button>
               </div>
             </div>
             <div id="playlist-select-row" class="playlist-select-row" style="display:none;">
@@ -974,6 +974,13 @@
             </div>
           </div>
           <div id="playlist-list" class="playlist-list"></div>
+        </div>
+        <div id="batch-bar" class="batch-bar" style="display:none">
+          <button id="batch-all" class="btn btn-ghost ripple-target">全选</button>
+          <button id="batch-inv" class="btn btn-ghost ripple-target">反选</button>
+          <span style="flex:1"></span>
+          <button id="batch-dl" class="btn btn-secondary ripple-target"><svg class="ic"><use href="#i-download"/></svg> <span id="batch-dl-label">下载选中</span> <span id="batch-count-wrap">(<span id="batch-count">0</span>)</span></button>
+          <button id="batch-exit" class="btn btn-ghost ripple-target" title="退出批量选择"><svg class="ic"><use href="#i-x"/></svg></button>
         </div>
       </section>
     </main>
@@ -1203,21 +1210,7 @@
         </div>
         <button id="downloads-close" class="modal-close-btn">×</button>
       </div>
-      <p class="modal-desc">下载任务由 musicdl 完成（自动写入标签 / 歌词），文件保存在服务端下载目录。</p>
-      <div class="set-section">
-        <h4><span id="dl-batch-title">批量下载 · 搜索结果</span>
-          <span class="set-tools">
-            <button id="dl-batch-all" class="btn btn-ghost ripple-target">全选</button>
-            <button id="dl-batch-inv" class="btn btn-ghost ripple-target">反选</button>
-            <button id="dl-batch-go" class="btn btn-secondary ripple-target"><svg class="ic"><use href="#i-download"/></svg> 下载选中 (<span id="dl-batch-count">0</span>)</button>
-          </span>
-        </h4>
-        <div class="dl-batch-tabs">
-          <button class="dl-btab active" data-btab="results">搜索结果</button>
-          <button class="dl-btab" data-btab="favorites">我的收藏</button>
-        </div>
-        <div id="dl-batch-list" class="dl-batch-list"><div class="dl-empty">先在左侧搜索，再来这里勾选批量下载</div></div>
-      </div>
+      <p class="modal-desc">下载任务由 musicdl 完成（自动写入标签 / 歌词），文件保存在服务端下载目录。批量下载请在右侧播放列表点 ☑ 进入批量选择。</p>
       <div class="set-section">
         <h4>任务
           <span class="set-tools">
@@ -1444,6 +1437,7 @@
       sortBy:'default',
       sortDir:'asc',
       searchFilterQuality:'all',
+      batchMode:false,
       batchPicked:new Set()
     };
 
@@ -2702,10 +2696,22 @@
       updatePlaylistInfoLabel();
 
       list=sortTrackList(list);
+      wrap.classList.toggle('batch-mode', !!state.batchMode);
       list.forEach((track,idx)=>{
         const item=document.createElement('div');
         item.className='track-item ripple-target';
         if(state.currentTrack && state.currentTrack.uid===track.uid) item.classList.add('playing');
+        if(state.batchMode && state.batchPicked.has(track.uid)) item.classList.add('batch-picked');
+
+        const chk=document.createElement('input');
+        chk.type='checkbox'; chk.className='batch-check';
+        chk.checked=state.batchPicked.has(track.uid);
+        chk.addEventListener('click',ev=>ev.stopPropagation());
+        chk.addEventListener('change',()=>{
+          if(chk.checked)state.batchPicked.add(track.uid); else state.batchPicked.delete(track.uid);
+          item.classList.toggle('batch-picked',chk.checked);
+          updateBatchCount();
+        });
 
         const index=document.createElement('div');
         index.className='track-index'; index.textContent=idx+1;
@@ -2779,8 +2785,11 @@
         act.appendChild(fBtn);
         act.appendChild(dBtn);
         if(activeTab==='playlists') act.appendChild(removeBtn);
-        item.appendChild(index);item.appendChild(meta);item.appendChild(act);
-        item.addEventListener('click',()=>{ pBtn.click(); });
+        item.appendChild(chk);item.appendChild(index);item.appendChild(meta);item.appendChild(act);
+        item.addEventListener('click',()=>{
+          if(state.batchMode){ chk.checked=!chk.checked; chk.dispatchEvent(new Event('change')); }
+          else pBtn.click();
+        });
         wrap.appendChild(item);
       });
 
@@ -2983,7 +2992,8 @@
     }
 
     function setPlaymodeUI(){
-      document.querySelectorAll('.playmode-btn').forEach(btn=>{
+      // 只动带 data-mode 的循环按钮，别清掉排序方向/批量按钮的高亮
+      document.querySelectorAll('.playmode-btn[data-mode]').forEach(btn=>{
         btn.classList.toggle('active',btn.dataset.mode===state.playMode);
       });
     }
@@ -3117,8 +3127,8 @@
             if(state.playlists.length&&!state.playContext.playlistId)state.playContext.playlistId=state.playlists[0].id;
           }
           renderPlaylistList();
-          const list=getActiveList();
-          if(!state.currentTrack && list.length) playFromList(state.playContext.type,0,state.playContext.playlistId);
+          // 切标签页不再自动播放第一首：曾导致切到收藏后 30 秒“凭空开始播歌 / 弹播放失败”
+          // （失效收藏在后台悄悄走 /api/resolve，用户毫不知情）
         });
       });
 
@@ -3276,39 +3286,52 @@
     function icon(n){return '<svg class="ic"><use href="#i-'+n+'"/></svg>';}
     const pendingDownloads=new Set();
 
-    async function ensureBackendId(track,force){
-      if(track.backendId&&!force)return track.backendId;
-      const nd=await API.send('/api/resolve',{source:track.source,title:track.title||'',artist:track.artist||'',keyword:track.keyword||''});
-      track.backendId=nd.id;
-      if(nd.stable_id){track.stableId=nd.stable_id;track.uid=nd.source+'-'+nd.stable_id;}
-      return track.backendId;
+    async function resolveTrack(track){
+      // 单曲重解析（45s 超时，慢音源不拖死整批）；不改 uid——uid 是收藏/勾选的 key
+      const ac=new AbortController();
+      const timer=setTimeout(()=>ac.abort(),45000);
+      try{
+        const nd=await API.send('/api/resolve',{source:track.source,title:track.title||'',artist:track.artist||'',keyword:track.keyword||''},'POST',{signal:ac.signal});
+        track.backendId=nd.id;
+        if(nd.stable_id)track.stableId=nd.stable_id;
+        return nd.id;
+      }finally{ clearTimeout(timer); }
     }
 
-    async function queueTracks(list){
-      await Promise.all(list.map(track=>ensureBackendId(track,false).catch(e=>null)));
-      let ids = list.map(t=>t.backendId).filter(id=>id);
-      if(!ids.length) throw new Error(state.language==='zh'?'没有可下载的歌曲':'No available songs');
-      try{return await API.send('/api/download',{ids:ids});}
-      catch(e){
-        if(e.status!==404)throw e;
-        let resolved = 0;
-        const limit = 5;
-        for (let i = 0; i < list.length; i += limit) {
-          const chunk = list.slice(i, i + limit);
-          if (list.length > 1) {
-            showToast((state.language==='zh'?'正在解析恢复: ':'Resolving: ') + resolved + ' / ' + list.length);
-          }
-          await Promise.all(chunk.map(track=>ensureBackendId(track, true).catch(err=>{
-            console.warn('Track resolve failed:', track.title, err);
-            track.backendId = null;
-          })));
-          resolved += chunk.length;
-        }
-        const finalIds = list.map(t=>t.backendId).filter(id=>id);
-        if(!finalIds.length) throw new Error(state.language==='zh'?'选中的歌曲均无法解析失效':'All selected songs failed to resolve');
-        if (list.length > 1) showToast((state.language==='zh'?'解析完成，正在提交...':'Resolved, submitting...'));
-        return API.send('/api/download',{ids:finalIds});
+    // 下载管线：一次批量校验旧 id → 只重解析失效的（3 并发 + 实时进度）→ 一次提交
+    async function queueTracks(list,onProgress){
+      // 1) 批量校验：一口气找出所有失效 id（旧后端没有该接口时降级为全部当作有效）
+      const withId=list.filter(t=>t.backendId);
+      let invalid=new Set();
+      if(withId.length){
+        try{
+          const v=await API.send('/api/songs/validate',{ids:withId.map(t=>t.backendId)});
+          invalid=new Set(v.invalid||[]);
+        }catch(e){ if(e.status!==404&&e.status!==405)throw e; }
       }
+      const need=list.filter(t=>!t.backendId||invalid.has(t.backendId));
+      // 2) 失效的重解析：3 并发（每个 resolve 是一次真实搜索，别打爆后端），逐首汇报进度
+      const failed=[];
+      if(need.length){
+        let doneCnt=0;
+        if(onProgress)onProgress(0,need.length);
+        const queue=[...need];
+        const worker=async()=>{
+          while(queue.length){
+            const t=queue.shift();
+            try{ await resolveTrack(t); }
+            catch(err){ console.warn('resolve failed:',t.title,err); t.backendId=null; failed.push(t); }
+            doneCnt++;
+            if(onProgress)onProgress(doneCnt,need.length);
+          }
+        };
+        await Promise.all(Array.from({length:Math.min(3,queue.length)},worker));
+      }
+      // 3) 一次性提交全部有效 id；后端会把仍失效的挑出来而不是整批拒绝
+      const ids=[...new Set(list.map(t=>t.backendId).filter(Boolean))];
+      if(!ids.length) throw new Error(state.language==='zh'?'选中的歌曲均解析失败，请检查对应音源是否可用':'All selected songs failed to resolve');
+      const resp=await API.send('/api/download',{ids});
+      return {queued:resp.queued??ids.length, failed:failed.map(t=>t.title||''), expired:resp.expired||[]};
     }
 
     // 列表行内下载：结果里同一首歌会有多个 格式/大小 版本，看音质徽标挑着下
@@ -3317,56 +3340,58 @@
       if(pendingDownloads.has(key)){showToast('该歌曲正在加入下载队列');return;}
       pendingDownloads.add(key);
       try{
-        await queueTracks([track]);
-        showToast((state.language==='zh'?'已加入下载：':'Queued: ')+(track.title||''));
+        const r=await queueTracks([track],(done,total)=>{
+          if(done<total)showToast(state.language==='zh'?'正在重新解析「'+(track.title||'')+'」…（收藏的旧记录需重新搜索，约几秒到半分钟）':'Re-resolving '+(track.title||'')+'…');
+        });
+        if(r.failed.length) showToast((state.language==='zh'?'解析失败：':'Failed: ')+(track.title||''));
+        else showToast((state.language==='zh'?'已加入下载：':'Queued: ')+(track.title||''));
       }catch(e){ showToast((state.language==='zh'?'下载失败: ':'Download failed: ')+e.message); }
       finally{pendingDownloads.delete(key);}
     }
 
-    // —— 批量下载（在“下载管理”弹窗内，勾选搜索结果 / 收藏一次性下载）——
-    let dlBatchTab='results';
-    function batchSourceList(){
-      if(dlBatchTab==='favorites') return state.favorites;
-      const l=getInterleavedSearchList();
-      return l.length?l:[...state.searchResults];
+    // —— 批量下载（主界面播放列表内：☑ 进入批量模式，勾选当前标签页的歌）——
+    function currentTabList(){
+      const tab=document.querySelector('.playlist-tab.active')?.dataset.tab||'results';
+      if(tab==='results'){ const l=getInterleavedSearchList(); return l.length?l:[...state.searchResults]; }
+      if(tab==='favorites') return state.favorites;
+      const pl=state.playlists.find(p=>p.id===dom.playlistSelect.value);
+      return pl?pl.tracks:[];
     }
-    function updateBatchCount(){ const el=$('dl-batch-count'); if(el)el.textContent=state.batchPicked.size; }
-    function renderBatchList(){
-      const wrap=$('dl-batch-list'); if(!wrap)return;
-      const list=batchSourceList();
-      // 修剪掉已不在当前列表里的勾选，避免计数虚高
-      const uids=new Set(list.map(tk=>tk.uid));
-      [...state.batchPicked].forEach(u=>{ if(!uids.has(u))state.batchPicked.delete(u); });
-      document.querySelectorAll('.dl-btab').forEach(b=>b.classList.toggle('active',b.dataset.btab===dlBatchTab));
-      if(!list.length){
-        wrap.innerHTML='<div class="dl-empty">'+(dlBatchTab==='favorites'?'暂无收藏':'先在左侧搜索，再来这里勾选批量下载')+'</div>';
-        updateBatchCount(); return;
-      }
-      wrap.innerHTML=list.map(tk=>{
-        const q=tk.ext?(String(tk.ext).toUpperCase()+(tk.fileSize?' · '+tk.fileSize:'')):'';
-        return '<label class="dl-batch-row'+(state.batchPicked.has(tk.uid)?' picked':'')+'" data-uid="'+escapeHtml(tk.uid)+'">'
-          +'<input type="checkbox" class="dl-batch-cb"'+(state.batchPicked.has(tk.uid)?' checked':'')+'>'
-          +'<span class="dl-name">'+escapeHtml(tk.title||'Unknown')+' <span class="dl-sub">'+escapeHtml(tk.artist||'')+' · '+escapeHtml(sourceLabel(tk.source))+'</span></span>'
-          +(q?'<span class="dl-sub">'+escapeHtml(q)+'</span>':'')+'</label>';
-      }).join('');
+    function updateBatchCount(){ const el=$('batch-count'); if(el)el.textContent=state.batchPicked.size; }
+    function setBatchMode(on){
+      state.batchMode=on;
+      if(!on) state.batchPicked.clear();
+      $('batch-bar').style.display=on?'flex':'none';
+      $('batch-toggle-btn').classList.toggle('active',on);
       updateBatchCount();
+      renderPlaylistList();
     }
-    // 批量下载：并发解析各曲的 backendId，一次性提交所有 ids（同一个后端任务分组）
+    // 批量下载：一次校验 + 并发重解析（带进度）+ 一次提交
     async function batchDownload(){
-      const list=batchSourceList().filter(tk=>state.batchPicked.has(tk.uid));
+      const list=currentTabList().filter(tk=>state.batchPicked.has(tk.uid));
       if(!list.length){ showToast(state.language==='zh'?'请先勾选歌曲':'Select songs first'); return; }
-      const btn=$('dl-batch-go'); btn.disabled=true;
-      showToast((state.language==='zh'?'正在准备 ':'Preparing ')+list.length+(state.language==='zh'?' 首…':' songs…'));
+      const btn=$('batch-dl'), label=$('batch-dl-label'), countWrap=$('batch-count-wrap');
+      btn.disabled=true;
       try{
-        await queueTracks(list);
-        showToast((state.language==='zh'?'已加入下载队列：':'Queued ')+list.length+(state.language==='zh'?' 首':' songs'));
-        state.batchPicked.clear();
-        renderBatchList();
-        refreshDownloads();
+        const r=await queueTracks(list,(done,total)=>{
+          countWrap.style.display='none';
+          label.textContent=(state.language==='zh'?'解析中 ':'Resolving ')+done+'/'+total+(state.language==='zh'?'（失效歌曲需重新搜索）':'');
+        });
+        let msg=(state.language==='zh'?'已加入下载队列：':'Queued: ')+r.queued+(state.language==='zh'?' 首':'');
+        const failNames=r.failed.filter(Boolean);
+        const failCnt=r.failed.length+r.expired.length;
+        if(failCnt) msg+=(state.language==='zh'?'；':'; ')+failCnt+(state.language==='zh'?' 首失败':' failed')
+          +(failNames.length?('：'+failNames.slice(0,3).join('、')+(failNames.length>3?'…':'')):'');
+        showToast(msg);
+        setBatchMode(false);
+        if(typeof refreshDownloads==='function')refreshDownloads();
       }catch(e){
         showToast((state.language==='zh'?'批量下载失败: ':'Batch download failed: ')+e.message);
       }
       btn.disabled=false;
+      label.textContent=state.language==='zh'?'下载选中':'Download selected';
+      countWrap.style.display='';
+      updateBatchCount();
     }
 
     async function loadBackend(){
@@ -3802,7 +3827,7 @@
         }
       }catch(e){ console.warn('downloads',e); }
     }
-    function openDownloads(){ $('downloads-modal').classList.add('show'); renderBatchList(); refreshDownloads(); if(!dlTimer)dlTimer=setInterval(refreshDownloads,2500); }
+    function openDownloads(){ $('downloads-modal').classList.add('show'); refreshDownloads(); if(!dlTimer)dlTimer=setInterval(refreshDownloads,2500); }
     function closeDownloads(){ $('downloads-modal').classList.remove('show'); if(dlTimer){clearInterval(dlTimer);dlTimer=null;} }
 
     // —— 新增控件事件 + 初始化（覆盖原 init）——
@@ -3876,25 +3901,24 @@
         try{ const r=await API.send('/api/cache/clear',{}); showToast('已清理 '+r.removed+' 个缓存文件，释放 '+r.freed_kb+' KB'); refreshDownloads(); }
         catch(e){ showToast('清理失败: '+e.message); }
       });
-      // 批量下载（下载管理弹窗内）
-      $('dl-batch-go').addEventListener('click',batchDownload);
-      $('dl-batch-all').addEventListener('click',()=>{ batchSourceList().forEach(tk=>state.batchPicked.add(tk.uid)); renderBatchList(); });
-      $('dl-batch-inv').addEventListener('click',()=>{
-        batchSourceList().forEach(tk=>{ if(state.batchPicked.has(tk.uid))state.batchPicked.delete(tk.uid); else state.batchPicked.add(tk.uid); });
-        renderBatchList();
+      // 批量下载（主界面播放列表内）
+      $('batch-toggle-btn').addEventListener('click',()=>setBatchMode(!state.batchMode));
+      $('batch-exit').addEventListener('click',()=>setBatchMode(false));
+      $('batch-dl').addEventListener('click',batchDownload);
+      $('batch-all').addEventListener('click',()=>{ currentTabList().forEach(tk=>state.batchPicked.add(tk.uid)); updateBatchCount(); renderPlaylistList(); });
+      $('batch-inv').addEventListener('click',()=>{
+        currentTabList().forEach(tk=>{ if(state.batchPicked.has(tk.uid))state.batchPicked.delete(tk.uid); else state.batchPicked.add(tk.uid); });
+        updateBatchCount(); renderPlaylistList();
       });
-      document.querySelectorAll('.dl-btab').forEach(b=>b.addEventListener('click',()=>{ dlBatchTab=b.dataset.btab; renderBatchList(); }));
-      $('dl-batch-list').addEventListener('change',e=>{
-        const cb=e.target.closest('.dl-batch-cb'); if(!cb)return;
-        const uid=cb.closest('.dl-batch-row').dataset.uid;
-        if(cb.checked)state.batchPicked.add(uid); else state.batchPicked.delete(uid);
-        cb.closest('.dl-batch-row').classList.toggle('picked',cb.checked);
-        updateBatchCount();
-      });
+      // 切换标签页时清空勾选（避免带着看不见的选择去下载）
+      document.querySelectorAll('.playlist-tab').forEach(tab=>tab.addEventListener('click',()=>{
+        if(state.batchMode&&state.batchPicked.size){ state.batchPicked.clear(); updateBatchCount(); }
+      }));
       document.addEventListener('keydown',e=>{
         if(e.key!=='Escape')return;
         if($('settings-modal').classList.contains('show'))$('settings-modal').classList.remove('show');
         else if($('downloads-modal').classList.contains('show'))closeDownloads();
+        else if(state.batchMode)setBatchMode(false);
       });
       dom.limitSelect.addEventListener('change',async()=>{
         if(!CONFIG)return;
