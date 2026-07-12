@@ -3235,7 +3235,11 @@
 
     async function apiError(r){
       const data=await r.json().catch(()=>({}));
-      const err=new Error(data.detail||r.statusText||'请求失败'); err.status=r.status; return err;
+      let msg=data.detail;
+      // FastAPI 校验错误(422)的 detail 是对象数组，拼成可读文本而不是 [object Object]
+      if(Array.isArray(msg)) msg=msg.map(d=>d&&d.msg?d.msg:JSON.stringify(d)).join('；');
+      else if(msg&&typeof msg==='object') msg=JSON.stringify(msg);
+      const err=new Error(msg||r.statusText||'请求失败'); err.status=r.status; return err;
     }
     const API={
       async get(p){const r=await fetch(p);if(r.status===401){showLoginModal();throw Object.assign(new Error('登录已失效'),{status:401});}if(!r.ok)throw await apiError(r);return r.json();},
@@ -3298,15 +3302,19 @@
       }finally{ clearTimeout(timer); }
     }
 
-    // 下载管线：一次批量校验旧 id → 只重解析失效的（3 并发 + 实时进度）→ 一次提交
+    // 下载管线：一次批量校验旧 id → 只重解析失效的（3 并发 + 实时进度）→ 分片提交
     async function queueTracks(list,onProgress){
       // 1) 批量校验：一口气找出所有失效 id（旧后端没有该接口时降级为全部当作有效）
       const withId=list.filter(t=>t.backendId);
       let invalid=new Set();
       if(withId.length){
         try{
-          const v=await API.send('/api/songs/validate',{ids:withId.map(t=>t.backendId)});
-          invalid=new Set(v.invalid||[]);
+          // 后端单次上限 500，按 400 分片
+          const idsAll=withId.map(t=>t.backendId);
+          for(let i=0;i<idsAll.length;i+=400){
+            const v=await API.send('/api/songs/validate',{ids:idsAll.slice(i,i+400)});
+            (v.invalid||[]).forEach(x=>invalid.add(x));
+          }
         }catch(e){ if(e.status!==404&&e.status!==405)throw e; }
       }
       const need=list.filter(t=>!t.backendId||invalid.has(t.backendId));
@@ -3327,11 +3335,23 @@
         };
         await Promise.all(Array.from({length:Math.min(3,queue.length)},worker));
       }
-      // 3) 一次性提交全部有效 id；后端会把仍失效的挑出来而不是整批拒绝
+      // 3) 分片提交（后端单次上限 100 首，超过会 422；按 80 一批拆成多个任务）
       const ids=[...new Set(list.map(t=>t.backendId).filter(Boolean))];
       if(!ids.length) throw new Error(state.language==='zh'?'选中的歌曲均解析失败，请检查对应音源是否可用':'All selected songs failed to resolve');
-      const resp=await API.send('/api/download',{ids});
-      return {queued:resp.queued??ids.length, failed:failed.map(t=>t.title||''), expired:resp.expired||[]};
+      let queued=0, alreadyQueued=0;
+      const expired=[];
+      for(let i=0;i<ids.length;i+=80){
+        const chunk=ids.slice(i,i+80);
+        try{
+          const resp=await API.send('/api/download',{ids:chunk});
+          queued+=resp.queued??chunk.length;
+          (resp.expired||[]).forEach(x=>expired.push(x));
+        }catch(e){
+          if(e.status===409){ alreadyQueued+=chunk.length; continue; }  // 整片都已在队列中
+          throw e;
+        }
+      }
+      return {queued, alreadyQueued, failed:failed.map(t=>t.title||''), expired};
     }
 
     // 列表行内下载：结果里同一首歌会有多个 格式/大小 版本，看音质徽标挑着下
@@ -3344,6 +3364,7 @@
           if(done<total)showToast(state.language==='zh'?'正在重新解析「'+(track.title||'')+'」…（收藏的旧记录需重新搜索，约几秒到半分钟）':'Re-resolving '+(track.title||'')+'…');
         });
         if(r.failed.length) showToast((state.language==='zh'?'解析失败：':'Failed: ')+(track.title||''));
+        else if(r.alreadyQueued) showToast(state.language==='zh'?'「'+(track.title||'')+'」已在下载队列中':'Already queued: '+(track.title||''));
         else showToast((state.language==='zh'?'已加入下载：':'Queued: ')+(track.title||''));
       }catch(e){ showToast((state.language==='zh'?'下载失败: ':'Download failed: ')+e.message); }
       finally{pendingDownloads.delete(key);}
@@ -3378,6 +3399,7 @@
           label.textContent=(state.language==='zh'?'解析中 ':'Resolving ')+done+'/'+total+(state.language==='zh'?'（失效歌曲需重新搜索）':'');
         });
         let msg=(state.language==='zh'?'已加入下载队列：':'Queued: ')+r.queued+(state.language==='zh'?' 首':'');
+        if(r.alreadyQueued) msg+=(state.language==='zh'?'；'+r.alreadyQueued+' 首已在队列中':'; '+r.alreadyQueued+' already queued');
         const failNames=r.failed.filter(Boolean);
         const failCnt=r.failed.length+r.expired.length;
         if(failCnt) msg+=(state.language==='zh'?'；':'; ')+failCnt+(state.language==='zh'?' 首失败':' failed')

@@ -145,6 +145,36 @@ def test_download_body_has_hard_limit():
         app.DownloadBody(ids=[str(i) for i in range(101)])
 
 
+def test_validate_reports_only_stale_ids():
+    song = SimpleNamespace(source='DemoMusicClient', identifier='7', song_name='歌', singers='手', album='辑')
+    sid = app.registersong(song)
+    result = app.validatesongs(app.ValidateBody(ids=[sid, 'nope-0001', 'nope-0001']))
+    assert result['invalid'] == ['nope-0001']
+
+
+def test_download_queues_valid_and_reports_expired(monkeypatch):
+    song = SimpleNamespace(source='DemoMusicClient', identifier='8', song_name='歌', singers='手', album='辑')
+    sid = app.registersong(song)
+    monkeypatch.setattr(app.manager, 'get', lambda: object())
+
+    class FakeFuture:
+        def add_done_callback(self, cb):
+            pass
+
+    class FakeExecutor:
+        def submit(self, fn, *args, **kwargs):
+            return FakeFuture()
+
+    monkeypatch.setattr(app, 'DOWNLOAD_EXECUTOR', FakeExecutor())
+    resp = app.download(app.DownloadBody(ids=[sid, 'expired-0001']))
+    assert resp['queued'] == 1
+    assert resp['expired'] == ['expired-0001']
+    with app.TASK_LOCK:
+        app.TASK_ORDER.remove(resp['task_id'])
+        app.TASKS.pop(resp['task_id'], None)
+        app.ACTIVE_SONG_IDS.discard(sid)
+
+
 def test_config_rolls_back_when_persistence_fails(monkeypatch):
     manager = app.ClientManager()
     old_config = copy.deepcopy(manager.config)
