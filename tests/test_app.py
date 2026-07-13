@@ -175,6 +175,66 @@ def test_download_queues_valid_and_reports_expired(monkeypatch):
         app.ACTIVE_SONG_IDS.discard(sid)
 
 
+class FakeFuture:
+    def add_done_callback(self, cb):
+        pass
+
+
+class FakeExecutor:
+    def submit(self, fn, *args, **kwargs):
+        return FakeFuture()
+
+
+def _make_task(task_id, entries):
+    return {'id': task_id, 'status': 'partial', 'created_at': '00:00:00',
+            'finished_at': '00:00:01', 'songs': entries}
+
+
+def test_delete_tasks_removes_finished_and_skips_running(monkeypatch):
+    finished = _make_task('done-1', [{'_song': object(), 'id': 'a', 'status': 'failed',
+                                      'detail': '', 'song_name': 's', 'singers': '', 'source': 'x'}])
+    running = _make_task('run-1', [{'_song': object(), 'id': 'b', 'status': 'running',
+                                    'detail': '', 'song_name': 's', 'singers': '', 'source': 'x'}])
+    running['status'] = 'running'
+    monkeypatch.setattr(app, 'TASKS', {'done-1': finished, 'run-1': running})
+    monkeypatch.setattr(app, 'TASK_ORDER', ['run-1', 'done-1'])
+    result = app.deletetasks(app.TaskIdsBody(ids=['done-1', 'run-1']))
+    assert result == {'removed': 1, 'skipped': 1}
+    assert app.TASK_ORDER == ['run-1']
+    assert 'done-1' not in app.TASKS
+
+
+def test_retry_requeues_only_failed_songs(monkeypatch):
+    song = SimpleNamespace(source='DemoMusicClient', identifier='9', song_name='歌', singers='手', album='辑')
+    entries = [
+        {'_song': object(), 'id': 'ok', 'status': 'done', 'detail': 'ok.flac',
+         'song_name': '成功', 'singers': '', 'source': 'x'},
+        {'_song': song, 'id': 'bad', 'status': 'failed', 'detail': '失败',
+         'song_name': '失败', 'singers': '', 'source': 'x'},
+    ]
+    task = _make_task('t-1', entries)
+    monkeypatch.setattr(app, 'TASKS', {'t-1': task})
+    monkeypatch.setattr(app, 'TASK_ORDER', ['t-1'])
+    monkeypatch.setattr(app, 'ACTIVE_SONG_IDS', set())
+    monkeypatch.setattr(app, 'DOWNLOAD_EXECUTOR', FakeExecutor())
+    result = app.retrytask('t-1')
+    assert result == {'task_id': 't-1', 'retrying': 1}
+    assert entries[0]['status'] == 'done'          # 成功的不动
+    assert entries[1]['status'] == 'pending'        # 失败的重新排队
+    assert task['status'] == 'pending'
+
+
+def test_retry_rejects_when_all_failed_songs_expired(monkeypatch):
+    entries = [{'_song': None, 'id': 'gone', 'status': 'failed', 'detail': '过期',
+                'song_name': '过期', 'singers': '', 'source': 'x'}]
+    task = _make_task('t-2', entries)
+    monkeypatch.setattr(app, 'TASKS', {'t-2': task})
+    monkeypatch.setattr(app, 'TASK_ORDER', ['t-2'])
+    with pytest.raises(HTTPException) as caught:
+        app.retrytask('t-2')
+    assert caught.value.status_code == 410
+
+
 def test_config_rolls_back_when_persistence_fails(monkeypatch):
     manager = app.ClientManager()
     old_config = copy.deepcopy(manager.config)

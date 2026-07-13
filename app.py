@@ -607,6 +607,10 @@ class ValidateBody(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=500)
 
 
+class TaskIdsBody(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class ConfigBody(BaseModel):
     music_sources: list[str]
     global_client_cfg: dict
@@ -973,46 +977,65 @@ def applylayout(song):
     song._save_path = None  # force save_path to recompute from the new work_dir
 
 
+def _songlabel(e: dict) -> str:
+    name = e.get('song_name') or '未知歌曲'
+    singers = e.get('singers') or ''
+    return f'{name} - {singers}' if singers else name
+
+
 def runtask(task_id: str, task: dict):
     task['status'] = 'running'
     client = manager.client
     entries = task['songs']
-    valid = [e for e in entries if e['_song'] is not None and e['_song'].source in client.music_clients]
+    # 只处理尚未成功的：retry 时已完成的保持 done，不重复下载
+    todo = [e for e in entries if e['status'] != 'done']
+    valid = [e for e in todo if e['_song'] is not None and e['_song'].source in client.music_clients]
     valid_ids = {id(e) for e in valid}  # identity, not dict equality (同曲可重复入队)
-    for e in entries:
+    for e in todo:
         if e['_song'] is None:
-            e['status'], e['detail'] = 'failed', '结果已过期'
+            e['status'], e['detail'] = 'failed', '搜索结果已过期，请重新搜索该歌曲后再下载'
+            pushlog('warning', f'跳过「{_songlabel(e)}」：搜索结果已过期（服务重启会清空结果缓存）')
         elif id(e) not in valid_ids:
-            e['status'], e['detail'] = 'failed', '对应音源已被禁用'
+            e['status'], e['detail'] = 'failed', f'音源 {e.get("source") or "?"} 当前未启用'
+            pushlog('warning', f'跳过「{_songlabel(e)}」：所属音源当前未在设置里启用')
         else:
             e['status'] = 'running'
             try:
                 applylayout(e['_song'])
             except Exception as err:
-                pushlog('warning', f'应用下载分类失败，回退默认: {err}')
+                pushlog('warning', f'「{_songlabel(e)}」应用下载分类目录失败，改用默认目录: {err}')
+    if valid:
+        preview = '、'.join(_songlabel(e) for e in valid[:3]) + ('…' if len(valid) > 3 else '')
+        pushlog('info', f'▶ 开始下载 {len(valid)} 首（任务 {task_id}）：{preview}')
     try:
         done = client.download([e['_song'] for e in valid])
         # musicdl deep-copies SongInfo objects while downloading, so match by identity fields
         def matchkey(s):
             return (str(s.source), str(s.identifier or ''), str(s.song_name or ''))
         done_map = {matchkey(s): s for s in done}
+        ok_cnt = 0
         for e in valid:
             hit = done_map.get(matchkey(e['_song']))
             if hit is not None:
                 e['status'] = 'done'
+                ok_cnt += 1
                 try:
                     e['detail'] = os.path.basename(hit.save_path)
                 except Exception:
                     e['detail'] = ''
+                pushlog('info', f'✓ 下载成功：{_songlabel(e)}' + (f' → {e["detail"]}' if e['detail'] else ''))
             else:
-                e['status'], e['detail'] = 'failed', '下载失败，详见日志'
+                e['status'], e['detail'] = 'failed', '该音源未返回可用文件（可能需登录/VIP，或已下架），可点重试换源'
+                pushlog('warning', f'✗ 下载失败：{_songlabel(e)}（{e.get("source") or "?"} 未返回可用文件）')
         task['status'] = 'done' if all(e['status'] == 'done' for e in entries) else ('failed' if all(e['status'] == 'failed' for e in entries) else 'partial')
+        fail_cnt = len(valid) - ok_cnt
+        pushlog('info', f'■ 任务 {task_id} 结束：成功 {ok_cnt} 首' + (f'，失败 {fail_cnt} 首（可点重试）' if fail_cnt else ''))
     except Exception as err:
         for e in valid:
             if e['status'] == 'running':
-                e['status'], e['detail'] = 'failed', str(err)
+                e['status'], e['detail'] = 'failed', f'下载中断：{err}'
         task['status'] = 'failed'
-        pushlog('error', f'下载任务异常: {err}')
+        pushlog('error', f'✗ 任务 {task_id} 异常中断：{err}')
     task['finished_at'] = time.strftime('%H:%M:%S')
     with TASK_LOCK:
         for entry in entries:
@@ -1090,7 +1113,54 @@ def download(body: DownloadBody):
         ACTIVE_SONG_IDS.update(ids)
     future = DOWNLOAD_EXECUTOR.submit(runtask, task_id, task)
     future.add_done_callback(lambda finished: _download_future_done(task, finished))
+    pushlog('info', f'＋ 已加入下载队列 {len(ids)} 首（任务 {task_id}）'
+            + (f'，另有 {len(expired)} 首结果已过期被跳过' if expired else ''))
     return {'task_id': task_id, 'queued': len(ids), 'expired': expired}
+
+
+@app.post('/api/tasks/{task_id}/retry')
+def retrytask(task_id: str):
+    '''重试一个任务里下载失败的歌曲（已成功的保持不变，不重复下载）'''
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
+        if not task:
+            raise HTTPException(404, '任务不存在或已被清除')
+        if task.get('status') in ('running', 'pending'):
+            raise HTTPException(409, '任务仍在下载中，请等它结束后再重试')
+        failed = [e for e in task['songs'] if e['status'] == 'failed']
+        if not failed:
+            raise HTTPException(400, '该任务没有失败的歌曲，无需重试')
+        alive = [e for e in failed if e['_song'] is not None]
+        if not alive:
+            raise HTTPException(410, '失败歌曲的搜索结果均已过期，请回到搜索结果里重新下载')
+        for e in alive:
+            e['status'], e['detail'] = 'pending', ''
+        task['status'] = 'pending'
+        task['finished_at'] = None
+        ACTIVE_SONG_IDS.update(e['id'] for e in alive)
+    future = DOWNLOAD_EXECUTOR.submit(runtask, task_id, task)
+    future.add_done_callback(lambda finished: _download_future_done(task, finished))
+    pushlog('info', f'↻ 重试任务 {task_id} 的 {len(alive)} 首失败歌曲')
+    return {'task_id': task_id, 'retrying': len(alive)}
+
+
+@app.post('/api/tasks/delete')
+def deletetasks(body: TaskIdsBody):
+    '''批量删除下载任务记录（正在下载/排队中的会被跳过，避免丢掉进行中任务）'''
+    removed, skipped = 0, 0
+    with TASK_LOCK:
+        for tid in dict.fromkeys(body.ids):
+            task = TASKS.get(tid)
+            if not task:
+                continue
+            if task.get('status') in ('running', 'pending'):
+                skipped += 1
+                continue
+            if tid in TASK_ORDER:
+                TASK_ORDER.remove(tid)
+            TASKS.pop(tid, None)
+            removed += 1
+    return {'removed': removed, 'skipped': skipped}
 
 
 @app.post('/api/tasks/clear-finished')

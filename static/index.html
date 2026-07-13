@@ -117,6 +117,12 @@
     }
     .shortcut-toggle-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
     .shortcut-toggle-btn .ic { width: 18px; height: 18px; }
+    .dl-badge {
+      position: absolute; top: 3px; right: 3px; min-width: 15px; height: 15px;
+      padding: 0 3px; border-radius: 999px; background: var(--accent-red); color: #fff;
+      font-size: 9.5px; font-weight: 800; line-height: 15px; text-align: center;
+      box-shadow: 0 0 0 1.5px var(--card-soft);
+    }
 
     /* ===== 三栏布局 ===== */
     .layout {
@@ -443,10 +449,11 @@
     .track-item.playing { background: var(--accent-soft); border-color: rgba(79,124,255,.5); box-shadow: var(--shadow-sm); }
     .track-item.playing .track-meta-title { color: var(--accent-deep); }
     .track-index {
-      width: 22px; text-align: center; font-size: 11px; font-weight: 800;
+      width: 22px; min-width: 22px; text-align: center; font-size: 11px; font-weight: 800;
       color: var(--text-faint); flex-shrink: 0;
     }
-    .track-item > div:nth-child(2) { flex: 1; min-width: 0; }
+    /* 歌曲信息区吃掉剩余宽度；min-width:0 才能让长歌名省略号生效、不把下载按钮挤出视口 */
+    .track-meta { flex: 1 1 auto; min-width: 0; }
     .track-meta-title { font-size: 13px; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .track-meta-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 7px; font-size: 11px; color: var(--text-sub); margin-top: 2px; }
     .track-meta-sub > span { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
@@ -627,6 +634,11 @@
     }
     .task-group-head .tg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .task-group-head .tg-prog { color: var(--text-sub); font-weight: 700; font-size: 11.5px; }
+    .task-group-head .tg-act { display: inline-flex; gap: 3px; flex-shrink: 0; }
+    .task-group-head .tg-act .btn-icon { width: 26px; height: 26px; border-radius: 8px; }
+    .task-group-head .tg-act .btn-icon .ic { width: 13px; height: 13px; }
+    .task-group-head .tg-act .tg-retry:hover { color: var(--accent-deep); }
+    .task-group-head .tg-act .tg-del:hover { color: var(--accent-red); }
     .task-group-body { display: none; }
     .task-group.open .task-group-body { display: block; }
     .task-group-head .tg-caret { transition: transform .2s; color: var(--text-faint); }
@@ -773,6 +785,7 @@
     <symbol id="i-checksq" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8.5 12 2.5 2.5 5-5"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.2 3.9A2 2 0 0 0 7.5 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
     <symbol id="i-broom" viewBox="0 0 24 24"><path d="m13 11 8-8"/><path d="M13.5 11.5c2 2 3 4.5 2.5 7.5-3 .5-5.5-.5-7.5-2.5"/><path d="M5 21c1-3 2.5-5.5 5-7l3 3c-1.5 2.5-4 4-8 4Z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v5h-5"/></symbol>
   </svg>
   <canvas id="bg-canvas"></canvas>
 
@@ -797,7 +810,7 @@
           快捷键：Space 播放/暂停 · ←/→ 跳转 · ↑/↓ 音量 · N/P 切歌 · F 收藏 · L 切换歌词效果
         </div>
         <button id="shortcut-toggle-btn" class="shortcut-toggle-btn ripple-target" title="快捷键说明"><svg class="ic"><use href="#i-keyboard"/></svg></button>
-        <button id="downloads-toggle-btn" class="shortcut-toggle-btn ripple-target" title="下载管理 / 日志"><svg class="ic"><use href="#i-download"/></svg></button>
+        <button id="downloads-toggle-btn" class="shortcut-toggle-btn ripple-target" title="下载管理 / 日志"><svg class="ic"><use href="#i-download"/></svg><span id="dl-badge" class="dl-badge" hidden>0</span></button>
         <button id="settings-toggle-btn" class="shortcut-toggle-btn ripple-target" title="设置"><svg class="ic"><use href="#i-settings"/></svg></button>
         <button id="logout-btn" class="shortcut-toggle-btn ripple-target" title="退出登录" onclick="doLogout()" hidden><svg class="ic"><use href="#i-logout"/></svg></button>
       </div>
@@ -1212,9 +1225,11 @@
       </div>
       <p class="modal-desc">下载任务由 musicdl 完成（自动写入标签 / 歌词），文件保存在服务端下载目录。批量下载请在右侧播放列表点 ☑ 进入批量选择。</p>
       <div class="set-section">
-        <h4>任务
+        <h4>下载任务
           <span class="set-tools">
+            <button id="dl-retry-all" class="btn btn-ghost ripple-target"><svg class="ic"><use href="#i-refresh"/></svg> 重试全部失败</button>
             <button id="dl-clear" class="btn btn-ghost ripple-target"><svg class="ic"><use href="#i-broom"/></svg> 清除已完成</button>
+            <button id="dl-clear-all" class="btn btn-ghost ripple-target"><svg class="ic"><use href="#i-trash"/></svg> 全部清空</button>
           </span>
         </h4>
         <div id="dl-tasks"><div class="dl-empty">暂无下载任务</div></div>
@@ -2717,6 +2732,7 @@
         index.className='track-index'; index.textContent=idx+1;
 
         const meta=document.createElement('div');
+        meta.className='track-meta';
         const title=document.createElement('div');
         title.className='track-meta-title'; title.textContent=track.title||'Unknown';
         const sub=document.createElement('div');
@@ -3365,7 +3381,7 @@
         });
         if(r.failed.length) showToast((state.language==='zh'?'解析失败：':'Failed: ')+(track.title||''));
         else if(r.alreadyQueued) showToast(state.language==='zh'?'「'+(track.title||'')+'」已在下载队列中':'Already queued: '+(track.title||''));
-        else showToast((state.language==='zh'?'已加入下载：':'Queued: ')+(track.title||''));
+        else { showToast((state.language==='zh'?'已加入下载，点右上角 ⬇ 查看进度：':'Queued: ')+(track.title||'')); startTaskWatch(); }
       }catch(e){ showToast((state.language==='zh'?'下载失败: ':'Download failed: ')+e.message); }
       finally{pendingDownloads.delete(key);}
     }
@@ -3406,6 +3422,7 @@
           +(failNames.length?('：'+failNames.slice(0,3).join('、')+(failNames.length>3?'…':'')):'');
         showToast(msg);
         setBatchMode(false);
+        if(r.queued)startTaskWatch();
         if(typeof refreshDownloads==='function')refreshDownloads();
       }catch(e){
         showToast((state.language==='zh'?'批量下载失败: ':'Batch download failed: ')+e.message);
@@ -3801,37 +3818,60 @@
     }
 
     // —— 下载管理弹窗 ——
-    let dlTimer=null;
+    let dlTimer=null, taskWatchTimer=null;
     const DL_STATE_ZH={pending:'等待',running:'下载中',done:'完成',partial:'部分完成',failed:'失败'};
+    function updateDlBadge(n){
+      const b=$('dl-badge'); if(!b)return;
+      if(n>0){ b.textContent=n>99?'99+':n; b.hidden=false; } else b.hidden=true;
+    }
+    // 点下载后即使不打开弹窗，也轮询任务数量在 ⬇ 按钮上显示角标；没有进行中任务就停
+    async function pollTaskBadge(){
+      try{
+        const tk=await API.get('/api/tasks');
+        const active=(tk.tasks||[]).filter(t=>t.status==='running'||t.status==='pending').length;
+        updateDlBadge(active);
+        if(!active&&taskWatchTimer){ clearInterval(taskWatchTimer); taskWatchTimer=null; }
+      }catch(e){}
+    }
+    function startTaskWatch(){ pollTaskBadge(); if(!taskWatchTimer)taskWatchTimer=setInterval(pollTaskBadge,2500); }
     async function refreshDownloads(){
       try{
         const [tk,fl,lg]=await Promise.all([API.get('/api/tasks'),API.get('/api/files'),API.get('/api/logs')]);
         const tw=$('dl-tasks');
         // 记住哪些任务卡是展开的（重渲染后保留）
         const openIds=new Set([...tw.querySelectorAll('.task-group.open')].map(el=>el.dataset.tid));
+        let activeCnt=0;
         const groups=tk.tasks.map(task=>{
           const songs=task.songs||[];
           const done=songs.filter(s=>s.status==='done').length;
           const failed=songs.filter(s=>s.status==='failed').length;
           const total=songs.length||1;
-          const pct=Math.round((done/total)*100);
+          const finishedCnt=done+failed;
+          const pct=Math.round((finishedCnt/total)*100);
           // 单曲任务默认展开，多曲任务默认折叠（除非之前展开过）
           const isOpen=openIds.has(task.id)||(songs.length<=1);
           const running=task.status==='running'||task.status==='pending';
-          const badge=running?('<span class="dl-state running">'+DL_STATE_ZH[task.status]+'</span>')
+          if(running)activeCnt++;
+          const badge=running?('<span class="dl-state running">'+DL_STATE_ZH[task.status]+' '+finishedCnt+'/'+total+'</span>')
             :(failed===0?'<span class="dl-state done">完成</span>'
               :(done===0?'<span class="dl-state failed">失败</span>':'<span class="dl-state partial">部分完成</span>'));
+          // 操作按钮：失败可重试、非进行中可删除（进行中不显示删除，避免误删）
+          let acts='';
+          if(!running&&failed>0) acts+='<button class="btn btn-secondary btn-icon tg-retry ripple-target" data-tid="'+escapeHtml(task.id)+'" title="重试失败的歌曲">'+icon('refresh')+'</button>';
+          if(!running) acts+='<button class="btn btn-ghost btn-icon tg-del ripple-target" data-tid="'+escapeHtml(task.id)+'" title="删除此任务">'+icon('trash')+'</button>';
           const rows=songs.map(s=>'<div class="dl-item"><span class="dl-state '+escapeHtml(s.status)+'">'+(DL_STATE_ZH[s.status]||s.status)+'</span>'
             +'<span class="dl-name">'+escapeHtml(s.song_name)+' <span class="dl-sub">'+escapeHtml(s.singers||'')+' · '+escapeHtml(s.source||'')+'</span></span>'
             +'<span class="dl-sub">'+escapeHtml(s.detail||'')+'</span></div>').join('');
           return '<div class="task-group'+(isOpen?' open':'')+'" data-tid="'+escapeHtml(task.id)+'">'
             +'<div class="task-group-head"><svg class="ic tg-caret"><use href="#i-play"/></svg>'
             +'<span class="tg-title">批次 · '+songs.length+' 首'+(task.created_at?' · '+escapeHtml(task.created_at):'')+'</span>'
-            +'<span class="tg-prog">'+done+'/'+songs.length+(failed?' ✗'+failed:'')+'</span>'
-            +'<span class="tg-bar"><i style="width:'+pct+'%"></i></span>'+badge+'</div>'
+            +'<span class="tg-prog">'+finishedCnt+'/'+songs.length+(failed?' ✗'+failed:'')+'</span>'
+            +'<span class="tg-bar"><i style="width:'+pct+'%"></i></span>'+badge
+            +(acts?'<span class="tg-act">'+acts+'</span>':'')+'</div>'
             +'<div class="task-group-body">'+rows+'</div></div>';
         });
         tw.innerHTML=groups.length?groups.join(''):'<div class="dl-empty">暂无下载任务</div>';
+        updateDlBadge(activeCnt);
         const fw=$('dl-files');
         fw.innerHTML=fl.files.length?fl.files.map(f=>{
           const q='d='+encodeURIComponent(f.dir)+'&rel='+encodeURIComponent(f.rel);
@@ -3849,8 +3889,8 @@
         }
       }catch(e){ console.warn('downloads',e); }
     }
-    function openDownloads(){ $('downloads-modal').classList.add('show'); refreshDownloads(); if(!dlTimer)dlTimer=setInterval(refreshDownloads,2500); }
-    function closeDownloads(){ $('downloads-modal').classList.remove('show'); if(dlTimer){clearInterval(dlTimer);dlTimer=null;} }
+    function openDownloads(){ $('downloads-modal').classList.add('show'); if(taskWatchTimer){clearInterval(taskWatchTimer);taskWatchTimer=null;} refreshDownloads(); if(!dlTimer)dlTimer=setInterval(refreshDownloads,2500); }
+    function closeDownloads(){ $('downloads-modal').classList.remove('show'); if(dlTimer){clearInterval(dlTimer);dlTimer=null;} startTaskWatch(); }
 
     // —— 新增控件事件 + 初始化（覆盖原 init）——
     function setupBackendUI(){
@@ -3906,14 +3946,43 @@
         try{ await API.send('/api/file?'+btn.dataset.q,null,'DELETE'); showToast('已删除'); refreshDownloads(); }
         catch(err){ showToast('删除失败: '+err.message); }
       });
-      // 任务卡片展开/折叠
-      $('dl-tasks').addEventListener('click',e=>{
+      // 任务卡片：重试 / 删除 / 展开折叠
+      $('dl-tasks').addEventListener('click',async e=>{
+        const retryBtn=e.target.closest('.tg-retry');
+        if(retryBtn){
+          e.stopPropagation();
+          retryBtn.disabled=true;
+          try{ const r=await API.send('/api/tasks/'+encodeURIComponent(retryBtn.dataset.tid)+'/retry',{}); showToast('已重新下载 '+r.retrying+' 首失败歌曲'); startTaskWatch(); refreshDownloads(); }
+          catch(err){ showToast('重试失败: '+err.message); retryBtn.disabled=false; }
+          return;
+        }
+        const delBtn=e.target.closest('.tg-del');
+        if(delBtn){
+          e.stopPropagation();
+          try{ const r=await API.send('/api/tasks/delete',{ids:[delBtn.dataset.tid]}); if(r.removed)showToast('已删除任务'); else showToast('该任务进行中，无法删除'); refreshDownloads(); }
+          catch(err){ showToast('删除失败: '+err.message); }
+          return;
+        }
         const head=e.target.closest('.task-group-head'); if(!head)return;
         head.parentElement.classList.toggle('open');
       });
       $('dl-clear').addEventListener('click',async()=>{
         try{ const r=await API.send('/api/tasks/clear-finished',{}); showToast('已清除 '+r.removed+' 个已完成任务'); refreshDownloads(); }
         catch(e){ showToast('清除失败: '+e.message); }
+      });
+      $('dl-clear-all').addEventListener('click',async()=>{
+        const ids=[...$('dl-tasks').querySelectorAll('.task-group')].map(el=>el.dataset.tid).filter(Boolean);
+        if(!ids.length){ showToast('没有可清空的任务'); return; }
+        if(!window.confirm('确认清空全部 '+ids.length+' 个任务？（正在下载中的会保留）'))return;
+        try{ const r=await API.send('/api/tasks/delete',{ids}); showToast('已清空 '+r.removed+' 个任务'+(r.skipped?('，'+r.skipped+' 个进行中已保留'):'')); refreshDownloads(); }
+        catch(e){ showToast('清空失败: '+e.message); }
+      });
+      $('dl-retry-all').addEventListener('click',async()=>{
+        const ids=[...$('dl-tasks').querySelectorAll('.task-group .tg-retry')].map(b=>b.dataset.tid);
+        if(!ids.length){ showToast('没有需要重试的失败任务'); return; }
+        let n=0;
+        for(const tid of ids){ try{ const r=await API.send('/api/tasks/'+encodeURIComponent(tid)+'/retry',{}); n+=r.retrying||0; }catch(e){} }
+        showToast(n?('已重新下载 '+n+' 首失败歌曲'):'没有可重试的歌曲'); startTaskWatch(); refreshDownloads();
       });
       $('dl-open-dir').addEventListener('click',async()=>{
         try{ const r=await API.send('/api/open-dir',{}); showToast('已在文件管理器中打开'); }
@@ -3965,7 +4034,7 @@
       renderPlaylistList();
       setPlaymodeUI();
       dom.audio.volume=parseFloat(dom.volumeSlider.value);
-      loadBackend().catch(e=>{ if(e.status!==401){console.error(e);showToast('后端连接失败: '+e.message);} });
+      loadBackend().then(()=>pollTaskBadge()).catch(e=>{ if(e.status!==401){console.error(e);showToast('后端连接失败: '+e.message);} });
     }
 
     document.addEventListener('DOMContentLoaded',init);
