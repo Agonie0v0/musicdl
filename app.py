@@ -983,8 +983,16 @@ def _songlabel(e: dict) -> str:
     return f'{name} - {singers}' if singers else name
 
 
+def _download_retry_limit() -> int:
+    try:
+        return max(0, min(5, int(manager.config.get('global_client_cfg', {}).get('max_retries', 3))))
+    except Exception:
+        return 3
+
+
 def runtask(task_id: str, task: dict):
     task['status'] = 'running'
+    task['progress'] = 0
     client = manager.client
     entries = task['songs']
     # 只处理尚未成功的：retry 时已完成的保持 done，不重复下载
@@ -993,49 +1001,80 @@ def runtask(task_id: str, task: dict):
     valid_ids = {id(e) for e in valid}  # identity, not dict equality (同曲可重复入队)
     for e in todo:
         if e['_song'] is None:
-            e['status'], e['detail'] = 'failed', '搜索结果已过期，请重新搜索该歌曲后再下载'
+            e['status'], e['detail'], e['progress'] = 'failed', '搜索结果已过期，请重新搜索该歌曲后再下载', 100
             pushlog('warning', f'跳过「{_songlabel(e)}」：搜索结果已过期（服务重启会清空结果缓存）')
         elif id(e) not in valid_ids:
-            e['status'], e['detail'] = 'failed', f'音源 {e.get("source") or "?"} 当前未启用'
+            e['status'], e['detail'], e['progress'] = 'failed', f'音源 {e.get("source") or "?"} 当前未启用', 100
             pushlog('warning', f'跳过「{_songlabel(e)}」：所属音源当前未在设置里启用')
         else:
             e['status'] = 'running'
+            e['detail'] = '正在准备下载'
+            e['progress'] = 0
+            e['attempts'] = int(e.get('attempts') or 0)
             try:
                 applylayout(e['_song'])
             except Exception as err:
-                pushlog('warning', f'「{_songlabel(e)}」应用下载分类目录失败，改用默认目录: {err}')
+                pushlog('warning', f'下载「{_songlabel(e)}」时无法使用设置的分类目录，已改用默认目录。原因：{err}')
     if valid:
         preview = '、'.join(_songlabel(e) for e in valid[:3]) + ('…' if len(valid) > 3 else '')
-        pushlog('info', f'▶ 开始下载 {len(valid)} 首（任务 {task_id}）：{preview}')
+        pushlog('info', f'下载任务 {task_id} 已开始，共 {len(valid)} 首：{preview}')
     try:
-        done = client.download([e['_song'] for e in valid])
-        # musicdl deep-copies SongInfo objects while downloading, so match by identity fields
         def matchkey(s):
             return (str(s.source), str(s.identifier or ''), str(s.song_name or ''))
-        done_map = {matchkey(s): s for s in done}
-        ok_cnt = 0
-        for e in valid:
-            hit = done_map.get(matchkey(e['_song']))
-            if hit is not None:
-                e['status'] = 'done'
-                ok_cnt += 1
-                try:
-                    e['detail'] = os.path.basename(hit.save_path)
-                except Exception:
-                    e['detail'] = ''
-                pushlog('info', f'✓ 下载成功：{_songlabel(e)}' + (f' → {e["detail"]}' if e['detail'] else ''))
-            else:
-                e['status'], e['detail'] = 'failed', '该音源未返回可用文件（可能需登录/VIP，或已下架），可点重试换源'
-                pushlog('warning', f'✗ 下载失败：{_songlabel(e)}（{e.get("source") or "?"} 未返回可用文件）')
+        retry_limit = _download_retry_limit()
+        remaining = valid
+        attempt = 0
+        while remaining and attempt <= retry_limit:
+            attempt += 1
+            for e in remaining:
+                e['attempts'] = attempt
+                e['status'] = 'running'
+                e['detail'] = f'正在下载（第 {attempt} 次尝试）'
+                e['progress'] = 30
+            if attempt > 1:
+                names = '、'.join(_songlabel(e) for e in remaining[:3]) + ('…' if len(remaining) > 3 else '')
+                pushlog('info', f'下载任务 {task_id} 正在自动重试第 {attempt - 1} 次：{names}')
+
+            done = client.download([e['_song'] for e in remaining]) or []
+            # musicdl deep-copies SongInfo objects while downloading, so match by identity fields
+            done_map = {matchkey(s): s for s in done}
+            next_remaining = []
+            for e in remaining:
+                hit = done_map.get(matchkey(e['_song']))
+                if hit is not None:
+                    e['status'] = 'done'
+                    e['progress'] = 100
+                    try:
+                        e['detail'] = os.path.basename(hit.save_path)
+                    except Exception:
+                        e['detail'] = '已保存'
+                    pushlog('info', f'下载成功：{_songlabel(e)}' + (f'，文件：{e["detail"]}' if e['detail'] else ''))
+                elif attempt <= retry_limit:
+                    e['status'] = 'pending'
+                    e['progress'] = 0
+                    e['detail'] = f'本次未拿到可用文件，准备第 {attempt + 1} 次重试'
+                    next_remaining.append(e)
+                else:
+                    e['status'] = 'failed'
+                    e['progress'] = 100
+                    e['detail'] = '多次尝试后仍未拿到可用文件，可能需要登录/VIP、歌曲下架或音源暂时不可用'
+                    pushlog('warning', f'下载失败：{_songlabel(e)}。原因：音源 {e.get("source") or "?"} 未返回可用文件，已达到重试上限')
+            done_cnt = sum(1 for e in entries if e['status'] == 'done')
+            failed_cnt = sum(1 for e in entries if e['status'] == 'failed')
+            task['progress'] = round(((done_cnt + failed_cnt) / max(1, len(entries))) * 100)
+            remaining = next_remaining
         task['status'] = 'done' if all(e['status'] == 'done' for e in entries) else ('failed' if all(e['status'] == 'failed' for e in entries) else 'partial')
-        fail_cnt = len(valid) - ok_cnt
-        pushlog('info', f'■ 任务 {task_id} 结束：成功 {ok_cnt} 首' + (f'，失败 {fail_cnt} 首（可点重试）' if fail_cnt else ''))
+        ok_cnt = sum(1 for e in entries if e['status'] == 'done')
+        fail_cnt = sum(1 for e in entries if e['status'] == 'failed')
+        task['progress'] = 100
+        pushlog('info', f'下载任务 {task_id} 已结束：成功 {ok_cnt} 首' + (f'，失败 {fail_cnt} 首，可在下载管理里手动重试' if fail_cnt else ''))
     except Exception as err:
         for e in valid:
             if e['status'] == 'running':
-                e['status'], e['detail'] = 'failed', f'下载中断：{err}'
+                e['status'], e['detail'], e['progress'] = 'failed', f'下载中断：{err}', 100
         task['status'] = 'failed'
-        pushlog('error', f'✗ 任务 {task_id} 异常中断：{err}')
+        task['progress'] = 100
+        pushlog('error', f'下载任务 {task_id} 中断。错误信息：{err}')
     task['finished_at'] = time.strftime('%H:%M:%S')
     with TASK_LOCK:
         for entry in entries:
@@ -1058,8 +1097,9 @@ def _download_future_done(task: dict, future):
     err = future.exception()
     if err is not None:
         task['status'] = 'failed'
+        task['progress'] = 100
         task['finished_at'] = time.strftime('%H:%M:%S')
-        pushlog('error', f'下载任务线程异常: {err}')
+        pushlog('error', f'下载任务后台线程异常：{err}')
     with TASK_LOCK:
         for entry in task['songs']:
             ACTIVE_SONG_IDS.discard(entry['id'])
@@ -1091,11 +1131,12 @@ def download(body: DownloadBody):
         song = songs_by_id[sid]
         songs.append({
             '_song': song, 'id': sid, 'status': 'pending', 'detail': '',
+            'progress': 0, 'attempts': 0,
             'song_name': str(song.song_name),
             'singers': str(song.singers),
             'source': str(song.source or '').removesuffix('MusicClient'),
         })
-    task = {'id': task_id, 'status': 'pending', 'created_at': time.strftime('%H:%M:%S'), 'finished_at': None, 'songs': songs}
+    task = {'id': task_id, 'status': 'pending', 'progress': 0, 'created_at': time.strftime('%H:%M:%S'), 'finished_at': None, 'songs': songs}
     with TASK_LOCK:
         new_ids = [sid for sid in ids if sid not in ACTIVE_SONG_IDS]
         if not new_ids:
@@ -1113,8 +1154,8 @@ def download(body: DownloadBody):
         ACTIVE_SONG_IDS.update(ids)
     future = DOWNLOAD_EXECUTOR.submit(runtask, task_id, task)
     future.add_done_callback(lambda finished: _download_future_done(task, finished))
-    pushlog('info', f'＋ 已加入下载队列 {len(ids)} 首（任务 {task_id}）'
-            + (f'，另有 {len(expired)} 首结果已过期被跳过' if expired else ''))
+    pushlog('info', f'已添加下载任务 {task_id}：{len(ids)} 首歌进入下载列表'
+            + (f'；另有 {len(expired)} 首因搜索结果过期被跳过' if expired else ''))
     return {'task_id': task_id, 'queued': len(ids), 'expired': expired}
 
 
@@ -1134,13 +1175,14 @@ def retrytask(task_id: str):
         if not alive:
             raise HTTPException(410, '失败歌曲的搜索结果均已过期，请回到搜索结果里重新下载')
         for e in alive:
-            e['status'], e['detail'] = 'pending', ''
+            e['status'], e['detail'], e['progress'], e['attempts'] = 'pending', '', 0, 0
         task['status'] = 'pending'
+        task['progress'] = 0
         task['finished_at'] = None
         ACTIVE_SONG_IDS.update(e['id'] for e in alive)
     future = DOWNLOAD_EXECUTOR.submit(runtask, task_id, task)
     future.add_done_callback(lambda finished: _download_future_done(task, finished))
-    pushlog('info', f'↻ 重试任务 {task_id} 的 {len(alive)} 首失败歌曲')
+    pushlog('info', f'已手动重试任务 {task_id}：{len(alive)} 首失败歌曲重新加入下载队列')
     return {'task_id': task_id, 'retrying': len(alive)}
 
 

@@ -439,27 +439,38 @@
 
     .playlist-list { display: flex; flex-direction: column; gap: 6px; }
     .track-item {
-      display: flex; align-items: center; gap: 10px;
+      display: grid;
+      grid-template-columns: auto 28px minmax(0, 1fr);
+      grid-template-areas:
+        "check index meta"
+        ". . actions";
+      align-items: start; gap: 6px 8px;
       flex-shrink: 0;
       background: var(--card-soft); border: 1px solid transparent;
-      border-radius: 12px; padding: 8px 10px; cursor: pointer;
+      border-radius: 12px; padding: 10px 10px; cursor: pointer;
       transition: all .15s; position: relative; overflow: hidden;
     }
     .track-item:hover { background: var(--accent-soft); border-color: rgba(79,124,255,.25); }
     .track-item.playing { background: var(--accent-soft); border-color: rgba(79,124,255,.5); box-shadow: var(--shadow-sm); }
     .track-item.playing .track-meta-title { color: var(--accent-deep); }
     .track-index {
-      width: 22px; min-width: 22px; text-align: center; font-size: 11px; font-weight: 800;
+      grid-area: index;
+      width: 28px; min-width: 28px; text-align: center; font-size: 11px; font-weight: 800;
       color: var(--text-faint); flex-shrink: 0;
+      padding-top: 3px;
     }
-    /* 歌曲信息区吃掉剩余宽度；min-width:0 才能让长歌名省略号生效、不把下载按钮挤出视口 */
-    .track-meta { flex: 1 1 auto; min-width: 0; }
-    .track-meta-title { font-size: 13px; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-meta { grid-area: meta; min-width: 0; }
+    .track-meta-title {
+      font-size: 13px; font-weight: 700; color: var(--text-main);
+      white-space: normal; overflow: hidden; text-overflow: clip;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      line-height: 1.35;
+    }
     .track-meta-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 7px; font-size: 11px; color: var(--text-sub); margin-top: 2px; }
     .track-meta-sub > span { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
     /* 歌手占第一行主要宽度，源/音质徽标放不下时自动换到下一行，不再挤掉歌手名 */
     .track-meta-sub > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 4em; max-width: 100%; }
-    .track-actions { display: flex; gap: 4px; flex-shrink: 0; }
+    .track-actions { grid-area: actions; display: flex; gap: 4px; flex-shrink: 0; justify-content: flex-start; }
     .track-actions .btn-icon { width: 29px; height: 29px; border-radius: 9px; }
     .track-actions .btn-icon .ic { width: 14px; height: 14px; }
 
@@ -597,11 +608,17 @@
     .dl-item .btn-icon .ic { width: 13px; height: 13px; }
     .dl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--text-main); }
     .dl-sub { color: var(--text-faint); font-size: 11px; white-space: nowrap; font-weight: 600; }
+    .dl-task-select {
+      width: 16px; height: 16px; flex-shrink: 0; margin: 0;
+      accent-color: var(--accent); cursor: pointer;
+    }
     .dl-state {
       font-size: 10.5px; font-weight: 800; padding: 2px 9px; border-radius: 999px;
       background: var(--card); border: 1px solid var(--border); color: var(--text-sub);
       white-space: nowrap;
     }
+    .dl-row-progress { width: 64px; height: 4px; background: var(--bg-2); border-radius: 999px; overflow: hidden; flex-shrink: 0; }
+    .dl-row-progress > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .3s; }
     .dl-state.running { color: var(--accent-deep); background: var(--accent-soft); border-color: rgba(79,124,255,.4); }
     .dl-state.done { color: var(--accent-green); background: #e7f9f2; border-color: rgba(24,184,128,.35); }
     .dl-state.failed, .dl-state.partial { color: var(--accent-red); background: #ffeef0; border-color: rgba(239,77,94,.3); }
@@ -618,6 +635,7 @@
     #batch-dl { background: linear-gradient(135deg, var(--accent), var(--accent-deep)); color: #fff; border: none; }
     #batch-dl:hover { color: #fff; }
     .batch-check {
+      grid-area: check;
       width: 18px; height: 18px; flex-shrink: 0; cursor: pointer;
       accent-color: var(--accent); margin-right: 2px; display: none;
     }
@@ -684,6 +702,18 @@
     ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
 
     /* ===== 响应式 ===== */
+    @media (min-width: 1281px) {
+      .track-item {
+        grid-template-columns: auto 34px minmax(0, 1fr) auto;
+        grid-template-areas: "check index meta actions";
+        align-items: center; gap: 8px;
+        padding: 8px 10px;
+      }
+      .track-index { width: 34px; min-width: 34px; padding-top: 0; }
+      .track-actions { justify-content: flex-end; }
+      .track-meta-title { white-space: nowrap; display: block; text-overflow: ellipsis; }
+    }
+
     @media (max-width: 1280px) {
       .layout { grid-template-columns: 300px minmax(0,1fr) 330px; gap: 12px; }
       .cover-wrapper { width: 140px; height: 140px; }
@@ -1228,6 +1258,7 @@
         <h4>下载任务
           <span class="set-tools">
             <button id="dl-retry-all" class="btn btn-ghost ripple-target"><svg class="ic"><use href="#i-refresh"/></svg> 重试全部失败</button>
+            <button id="dl-delete-selected" class="btn btn-ghost ripple-target"><svg class="ic"><use href="#i-trash"/></svg> 删除选中</button>
             <button id="dl-clear" class="btn btn-ghost ripple-target"><svg class="ic"><use href="#i-broom"/></svg> 清除已完成</button>
             <button id="dl-clear-all" class="btn btn-ghost ripple-target"><svg class="ic"><use href="#i-trash"/></svg> 全部清空</button>
           </span>
@@ -3355,19 +3386,21 @@
       const ids=[...new Set(list.map(t=>t.backendId).filter(Boolean))];
       if(!ids.length) throw new Error(state.language==='zh'?'选中的歌曲均解析失败，请检查对应音源是否可用':'All selected songs failed to resolve');
       let queued=0, alreadyQueued=0;
+      const taskIds=[];
       const expired=[];
       for(let i=0;i<ids.length;i+=80){
         const chunk=ids.slice(i,i+80);
         try{
           const resp=await API.send('/api/download',{ids:chunk});
           queued+=resp.queued??chunk.length;
+          if(resp.task_id)taskIds.push(resp.task_id);
           (resp.expired||[]).forEach(x=>expired.push(x));
         }catch(e){
           if(e.status===409){ alreadyQueued+=chunk.length; continue; }  // 整片都已在队列中
           throw e;
         }
       }
-      return {queued, alreadyQueued, failed:failed.map(t=>t.title||''), expired};
+      return {queued, alreadyQueued, taskIds, failed:failed.map(t=>t.title||''), expired};
     }
 
     // 列表行内下载：结果里同一首歌会有多个 格式/大小 版本，看音质徽标挑着下
@@ -3381,7 +3414,7 @@
         });
         if(r.failed.length) showToast((state.language==='zh'?'解析失败：':'Failed: ')+(track.title||''));
         else if(r.alreadyQueued) showToast(state.language==='zh'?'「'+(track.title||'')+'」已在下载队列中':'Already queued: '+(track.title||''));
-        else { showToast((state.language==='zh'?'已加入下载，点右上角 ⬇ 查看进度：':'Queued: ')+(track.title||'')); startTaskWatch(); }
+        else { showToast((state.language==='zh'?'已加入下载列表：':'Queued: ')+(track.title||'')); startTaskWatch(); openDownloads(); }
       }catch(e){ showToast((state.language==='zh'?'下载失败: ':'Download failed: ')+e.message); }
       finally{pendingDownloads.delete(key);}
     }
@@ -3422,8 +3455,8 @@
           +(failNames.length?('：'+failNames.slice(0,3).join('、')+(failNames.length>3?'…':'')):'');
         showToast(msg);
         setBatchMode(false);
-        if(r.queued)startTaskWatch();
-        if(typeof refreshDownloads==='function')refreshDownloads();
+        if(r.queued){ startTaskWatch(); openDownloads(); }
+        else if(typeof refreshDownloads==='function')refreshDownloads();
       }catch(e){
         showToast((state.language==='zh'?'批量下载失败: ':'Batch download failed: ')+e.message);
       }
@@ -3680,8 +3713,9 @@
       const tr=state.currentTrack;
       if(!tr){showToast(t('toastDownloadNotReady'));return;}
       try{
-        await queueTracks([tr]);
-        showToast(state.language==='zh'?'已加入下载任务，点右上角 ⬇️ 查看':'Download task created (see ⬇️)');
+        const r=await queueTracks([tr]);
+        showToast(state.language==='zh'?'已加入下载列表，正在显示进度':'Added to downloads');
+        if(r.queued) openDownloads();
       }catch(e){ showToast((state.language==='zh'?'下载失败: ':'Download failed: ')+e.message); }
     }
 
@@ -3819,6 +3853,7 @@
 
     // —— 下载管理弹窗 ——
     let dlTimer=null, taskWatchTimer=null;
+    const selectedDownloadTasks=new Set();
     const DL_STATE_ZH={pending:'等待',running:'下载中',done:'完成',partial:'部分完成',failed:'失败'};
     function updateDlBadge(n){
       const b=$('dl-badge'); if(!b)return;
@@ -3847,7 +3882,7 @@
           const failed=songs.filter(s=>s.status==='failed').length;
           const total=songs.length||1;
           const finishedCnt=done+failed;
-          const pct=Math.round((finishedCnt/total)*100);
+          const pct=Number.isFinite(task.progress)?Math.max(0,Math.min(100,Math.round(task.progress))):Math.round((finishedCnt/total)*100);
           // 单曲任务默认展开，多曲任务默认折叠（除非之前展开过）
           const isOpen=openIds.has(task.id)||(songs.length<=1);
           const running=task.status==='running'||task.status==='pending';
@@ -3859,11 +3894,16 @@
           let acts='';
           if(!running&&failed>0) acts+='<button class="btn btn-secondary btn-icon tg-retry ripple-target" data-tid="'+escapeHtml(task.id)+'" title="重试失败的歌曲">'+icon('refresh')+'</button>';
           if(!running) acts+='<button class="btn btn-ghost btn-icon tg-del ripple-target" data-tid="'+escapeHtml(task.id)+'" title="删除此任务">'+icon('trash')+'</button>';
-          const rows=songs.map(s=>'<div class="dl-item"><span class="dl-state '+escapeHtml(s.status)+'">'+(DL_STATE_ZH[s.status]||s.status)+'</span>'
+          const rows=songs.map(s=>{
+            const spct=Number.isFinite(s.progress)?Math.max(0,Math.min(100,Math.round(s.progress))):(s.status==='done'||s.status==='failed'?100:(s.status==='running'?35:0));
+            const attempt=s.attempts?(' · 第 '+escapeHtml(s.attempts)+' 次'):'';
+            return '<div class="dl-item"><span class="dl-state '+escapeHtml(s.status)+'">'+(DL_STATE_ZH[s.status]||s.status)+'</span>'
             +'<span class="dl-name">'+escapeHtml(s.song_name)+' <span class="dl-sub">'+escapeHtml(s.singers||'')+' · '+escapeHtml(s.source||'')+'</span></span>'
-            +'<span class="dl-sub">'+escapeHtml(s.detail||'')+'</span></div>').join('');
+            +'<span class="dl-row-progress" title="'+spct+'%"><i style="width:'+spct+'%"></i></span>'
+            +'<span class="dl-sub">'+escapeHtml(s.detail||'')+attempt+'</span></div>';
+          }).join('');
           return '<div class="task-group'+(isOpen?' open':'')+'" data-tid="'+escapeHtml(task.id)+'">'
-            +'<div class="task-group-head"><svg class="ic tg-caret"><use href="#i-play"/></svg>'
+            +'<div class="task-group-head"><input class="dl-task-select" type="checkbox" data-tid="'+escapeHtml(task.id)+'" '+(selectedDownloadTasks.has(task.id)?'checked':'')+' title="选择此任务"><svg class="ic tg-caret"><use href="#i-play"/></svg>'
             +'<span class="tg-title">批次 · '+songs.length+' 首'+(task.created_at?' · '+escapeHtml(task.created_at):'')+'</span>'
             +'<span class="tg-prog">'+finishedCnt+'/'+songs.length+(failed?' ✗'+failed:'')+'</span>'
             +'<span class="tg-bar"><i style="width:'+pct+'%"></i></span>'+badge
@@ -3871,6 +3911,8 @@
             +'<div class="task-group-body">'+rows+'</div></div>';
         });
         tw.innerHTML=groups.length?groups.join(''):'<div class="dl-empty">暂无下载任务</div>';
+        const visibleTaskIds=new Set((tk.tasks||[]).map(t=>t.id));
+        [...selectedDownloadTasks].forEach(id=>{ if(!visibleTaskIds.has(id))selectedDownloadTasks.delete(id); });
         updateDlBadge(activeCnt);
         const fw=$('dl-files');
         fw.innerHTML=fl.files.length?fl.files.map(f=>{
@@ -3948,6 +3990,12 @@
       });
       // 任务卡片：重试 / 删除 / 展开折叠
       $('dl-tasks').addEventListener('click',async e=>{
+        const pick=e.target.closest('.dl-task-select');
+        if(pick){
+          e.stopPropagation();
+          if(pick.checked)selectedDownloadTasks.add(pick.dataset.tid); else selectedDownloadTasks.delete(pick.dataset.tid);
+          return;
+        }
         const retryBtn=e.target.closest('.tg-retry');
         if(retryBtn){
           e.stopPropagation();
@@ -3959,7 +4007,7 @@
         const delBtn=e.target.closest('.tg-del');
         if(delBtn){
           e.stopPropagation();
-          try{ const r=await API.send('/api/tasks/delete',{ids:[delBtn.dataset.tid]}); if(r.removed)showToast('已删除任务'); else showToast('该任务进行中，无法删除'); refreshDownloads(); }
+          try{ const r=await API.send('/api/tasks/delete',{ids:[delBtn.dataset.tid]}); selectedDownloadTasks.delete(delBtn.dataset.tid); if(r.removed)showToast('已删除任务'); else showToast('该任务进行中，无法删除'); refreshDownloads(); }
           catch(err){ showToast('删除失败: '+err.message); }
           return;
         }
@@ -3970,11 +4018,22 @@
         try{ const r=await API.send('/api/tasks/clear-finished',{}); showToast('已清除 '+r.removed+' 个已完成任务'); refreshDownloads(); }
         catch(e){ showToast('清除失败: '+e.message); }
       });
+      $('dl-delete-selected').addEventListener('click',async()=>{
+        const ids=[...selectedDownloadTasks];
+        if(!ids.length){ showToast('请先勾选要删除的下载任务'); return; }
+        if(!window.confirm('确认删除选中的 '+ids.length+' 个任务？（正在下载中的会保留）'))return;
+        try{
+          const r=await API.send('/api/tasks/delete',{ids});
+          ids.forEach(id=>selectedDownloadTasks.delete(id));
+          showToast('已删除 '+r.removed+' 个任务'+(r.skipped?('，'+r.skipped+' 个进行中已保留'):''));
+          refreshDownloads();
+        }catch(e){ showToast('删除失败: '+e.message); }
+      });
       $('dl-clear-all').addEventListener('click',async()=>{
         const ids=[...$('dl-tasks').querySelectorAll('.task-group')].map(el=>el.dataset.tid).filter(Boolean);
         if(!ids.length){ showToast('没有可清空的任务'); return; }
         if(!window.confirm('确认清空全部 '+ids.length+' 个任务？（正在下载中的会保留）'))return;
-        try{ const r=await API.send('/api/tasks/delete',{ids}); showToast('已清空 '+r.removed+' 个任务'+(r.skipped?('，'+r.skipped+' 个进行中已保留'):'')); refreshDownloads(); }
+        try{ const r=await API.send('/api/tasks/delete',{ids}); selectedDownloadTasks.clear(); showToast('已清空 '+r.removed+' 个任务'+(r.skipped?('，'+r.skipped+' 个进行中已保留'):'')); refreshDownloads(); }
         catch(e){ showToast('清空失败: '+e.message); }
       });
       $('dl-retry-all').addEventListener('click',async()=>{
