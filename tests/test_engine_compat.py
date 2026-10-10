@@ -61,6 +61,53 @@ def fixture_song():
                     work_dir=str(_root / 'music' / 'MiguMusicClient'))
 
 
+def test_full_settings_save_preserves_all_original_fields_and_timeout_zero():
+    client = TestClient(app.app)
+    original = copy.deepcopy(app.original.manager.config)
+    try:
+        cfg = client.get('/api/engine/config').json()
+        cfg['request_timeout'] = 0
+        cfg['default_threads'] = 12
+        cfg['proxy_scope'] = 'selected'
+        cfg['proxy_sources'] = ['GDStudioMusicClient']
+        cfg['global_client_cfg'].update(search_size_per_page=25, max_retries=5,
+                                      strict_limit_search_size_per_page=False,
+                                      default_parse_cookies={'preserve': 'yes'})
+        cfg['init_music_clients_cfg']['MiguMusicClient'] = {'maintain_session': True}
+        cfg['clients_threadings']['MiguMusicClient'] = 7
+        cfg['requests_overrides']['MiguMusicClient'] = {'headers': {'X-Custom': 'keep'}}
+        cfg['search_rules']['MiguMusicClient'] = {'quality': 'keep'}
+        response = client.put('/api/engine/config', json=cfg, headers=HEADERS)
+        assert response.status_code == 200, response.text
+        restored = client.get('/api/engine/config').json()
+        for key in cfg:
+            assert restored[key] == cfg[key], key
+        cfg['request_timeout'] = 300
+        assert client.put('/api/engine/config', json=cfg, headers=HEADERS).status_code == 200
+        assert client.get('/api/engine/config').json()['request_timeout'] == 300
+        compact = client.get('/api/config').json()
+        assert client.put('/api/config', json=compact, headers=HEADERS).status_code == 200
+    finally:
+        app.original.manager.config = original
+        app.original.manager.client = None
+
+
+def test_search_size_uses_original_metadata_without_network_requests():
+    song = fixture_song()
+    remember = app.app.state.engine_test['remember']
+    assert remember(song)['size_bytes'] == len(song.downloaded_contents)
+    song.downloaded_contents = None
+    song.file_size_bytes = 31457280
+    song.file_size = '30 MB'
+    value = remember(song)
+    assert value['size_bytes'] == 31457280
+    assert value['size_label'] == '30 MB'
+    song.file_size_bytes = None
+    assert remember(song)['size_bytes'] is None
+    song.file_size = None
+    assert remember(song)['size_label'] is None
+
+
 def test_exact_song_info_persists_and_original_downloader_saves_audio():
     client = TestClient(app.app)
     song = fixture_song()

@@ -90,7 +90,7 @@ def install(old, root):
             db.commit()
 
     registered = old.MusicClientBuilder.REGISTERED_MODULES
-    catalog = [{'id': source_id(name), 'label': LABELS.get(source_id(name), name.removesuffix('MusicClient')),
+    catalog = [{'id': source_id(name), 'engine_name': name, 'label': LABELS.get(source_id(name), name.removesuffix('MusicClient')),
                 'category': next((cat for cat, names in old.SOURCE_CATEGORIES.items() if name in names), '其他')}
                for name in registered]
     # Original config.json has priority. Never replace its parser settings with
@@ -143,6 +143,8 @@ def install(old, root):
         return {'id': sid, 'source': source_id(str(song.source)), 'source_id': str(song.identifier or sid),
                 'title': str(song.song_name or ''), 'artist': str(song.singers or ''), 'album': str(song.album or ''),
                 'duration': float(song.duration_s or 0), 'cover': song.cover_url or None,
+                'size_bytes': song.file_size_bytes if isinstance(song.file_size_bytes, (int, float)) and song.file_size_bytes >= 0 else (len(song.downloaded_contents) if isinstance(song.downloaded_contents, (bytes, bytearray)) else None),
+                'size_label': str(song.file_size) if song.file_size else None,
                 'episodes': len(song.episodes or []), 'root_source': song.root_source or '',
                 'qualities': [{'id': quality, 'label': label, 'codec': ext, 'bitrate': bitrate, 'lossless': lossless,
                                'availability': 'resolved', 'evidence': 'engine'}],
@@ -234,7 +236,7 @@ def install(old, root):
         if not enabled or any(s not in registered for s in enabled):
             raise HTTPException(400, '请选择已注册的音源')
         count, timeout = int(body.get('results_per_source', 5)), int(body.get('search_timeout_seconds', 30))
-        if not 1 <= count <= 50 or not 1 <= timeout <= 120:
+        if not 1 <= count <= 50 or not 0 <= timeout <= 300:
             raise HTTPException(400, '结果数或请求超时超出范围')
         cfg['music_sources'] = list(dict.fromkeys(enabled))
         cfg['global_client_cfg']['search_size_per_source'] = count

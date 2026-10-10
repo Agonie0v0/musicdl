@@ -50,6 +50,7 @@ try {
     artist: "测试歌手",
     album: "测试专辑",
     duration: 8,
+    size_bytes: 31457280,
     cover: `${base}/test-cover-missing.png`,
     qualities: [
       {
@@ -100,6 +101,44 @@ try {
     embed_metadata: true,
     source_settings: {},
   };
+  let engineConfig = {
+    music_sources: [
+      "NeteaseMusicClient",
+      "MiguMusicClient",
+      "QQMusicClient",
+      "KuwoMusicClient",
+      "QianqianMusicClient",
+    ],
+    global_client_cfg: {
+      work_dir: "/music",
+      search_size_per_source: 3,
+      search_size_per_page: 10,
+      max_retries: 3,
+      strict_limit_search_size_per_page: true,
+      enable_search_curl_cffi: false,
+      enable_parse_curl_cffi: false,
+      enable_download_curl_cffi: false,
+      random_update_ua: false,
+      auto_set_proxies: false,
+      maintain_session: false,
+      default_parse_cookies: { preserve: "yes" },
+    },
+    proxy_url: "",
+    proxy_scope: "all",
+    proxy_sources: [],
+    request_timeout: 15,
+    default_threads: 10,
+    download_layout: "artist_album",
+    lyrics_mode: "both",
+    cookies: { MiguMusicClient: { fixture: "keep" } },
+    init_music_clients_cfg: { MiguMusicClient: { maintain_session: true } },
+    clients_threadings: { MiguMusicClient: 7 },
+    requests_overrides: {
+      MiguMusicClient: { headers: { "X-Custom": "keep" } },
+    },
+    search_rules: { MiguMusicClient: { quality: "keep" } },
+  };
+  let engineSaves = 0;
   let favorites = [],
     playlist = [],
     jobs = [];
@@ -125,7 +164,13 @@ try {
     else if (p === "/config")
       result =
         method === "PUT" ? { saved: true, restart_required: false } : cfg;
-    else if (p === "/favorites") result = favorites;
+    else if (p === "/engine/config") {
+      if (method === "PUT") {
+        engineConfig = request.postDataJSON();
+        engineSaves++;
+      }
+      result = method === "PUT" ? { saved: true } : engineConfig;
+    } else if (p === "/favorites") result = favorites;
     else if (p.startsWith("/favorites/")) {
       favorites = method === "PUT" ? [track] : [];
       result = { saved: true };
@@ -217,12 +262,14 @@ try {
     .getByRole("button", { name: "播放 测试曲目", exact: true })
     .waitFor();
   assert.equal(await page.locator("tbody tr").count(), 1);
-  await page.getByLabel("更多操作 测试曲目").click();
-  await page
-    .locator(".track-menu")
-    .getByRole("button", { name: "收藏曲目", exact: true })
-    .waitFor();
-  await page.getByLabel("更多操作 测试曲目").click();
+  for (const label of [
+    "收藏 测试曲目",
+    "播放 测试曲目",
+    "下载 测试曲目",
+    "加入播放列表 测试曲目",
+  ])
+    await expect(page.getByLabel(label, { exact: true })).toBeVisible();
+  await expect(page.getByText("30.0 MB", { exact: true })).toBeVisible();
   await page
     .getByRole("button", { name: "播放 测试曲目", exact: true })
     .click();
@@ -299,13 +346,15 @@ try {
   await page.getByRole("button", { name: "重新下载", exact: true }).click();
   assert.equal(jobs[0].status, "downloading");
   await page.getByRole("button", { name: "搜索音乐", exact: true }).click();
+  if (await page.getByLabel("关闭提示", { exact: true }).count())
+    await page.getByLabel("关闭提示", { exact: true }).click();
   await page.screenshot({ path: "../output/test-ui-search.png" });
   await page.getByLabel("界面主题").selectOption("dark");
   await page.screenshot({ path: "../output/test-ui-search-dark.png" });
   await page.getByLabel("界面主题").selectOption("light");
   await page.keyboard.press("Control+k");
   await expect(page.getByLabel("搜索音乐", { exact: true })).toBeFocused();
-  for (const width of [390, 768, 1440]) {
+  for (const width of [390, 768, 900, 1440]) {
     await page.setViewportSize({ width, height: 844 });
     assert.ok(
       await page.evaluate(
@@ -313,6 +362,16 @@ try {
       ),
       `overflow at ${width}`,
     );
+    if (width <= 900) {
+      const titleBox = await page.locator(".song-name").boundingBox();
+      assert.ok(titleBox.width >= 80, `title squeezed at ${width}`);
+      const actionBox = await page
+        .getByLabel("下载 测试曲目", { exact: true })
+        .boundingBox();
+      assert.ok(actionBox.height >= 44, `small touch target at ${width}`);
+    }
+    if (width === 768)
+      await page.screenshot({ path: "../output/test-ui-tablet.png" });
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByLabel("播放列表", { exact: true }).click();
@@ -337,11 +396,103 @@ try {
   });
   await page.screenshot({ path: "../output/test-ui-player-mobile.png" });
   await page.getByRole("button", { name: "搜索音乐", exact: true }).click();
+  if (await page.getByLabel("关闭提示", { exact: true }).count())
+    await page.getByLabel("关闭提示", { exact: true }).click();
   await page.screenshot({ path: "../output/test-ui-mobile.png" });
+  for (const label of [
+    "收藏 测试曲目",
+    "播放 测试曲目",
+    "下载 测试曲目",
+    "加入播放列表 测试曲目",
+  ])
+    await expect(page.getByLabel(label, { exact: true })).toBeVisible();
+  await page.getByLabel("加入播放列表 测试曲目", { exact: true }).click();
+  await page.getByLabel("下载 测试曲目", { exact: true }).click();
+  await page.getByRole("dialog").getByLabel("关闭", { exact: true }).click();
   await page.getByRole("button", { name: "音源与设置", exact: true }).click();
+  await page.locator(".source-setting").first().waitFor();
   assert.equal(await page.locator(".source-setting").count(), 6);
   assert.ok(await page.getByText("GDStudio", { exact: true }).isVisible());
+  await page.getByLabel("每页大小", { exact: true }).fill("25");
+  await page.getByLabel("最大重试次数", { exact: true }).fill("5");
+  await page.getByLabel("默认下载线程数", { exact: true }).fill("12");
+  await page
+    .getByLabel("请求超时（秒，0 表示不限）", { exact: true })
+    .fill("0");
+  await page.getByLabel("搜索使用浏览器指纹", { exact: false }).check();
+  await page
+    .getByLabel("代理作用范围", { exact: true })
+    .selectOption("selected");
+  await page
+    .locator(".source-picker")
+    .getByLabel("GDStudio", { exact: true })
+    .check();
+  await page
+    .getByLabel("全局 HTTP / HTTPS 代理", { exact: true })
+    .fill("http://localhost:7890");
+  const neteaseSettings = page.locator(".source-setting").first();
+  await neteaseSettings.locator("summary").click();
+  await neteaseSettings
+    .getByLabel("Cookie", { exact: true })
+    .fill("fixture=netease");
+  await neteaseSettings.getByLabel("分源下载线程数", { exact: true }).fill("9");
+  await neteaseSettings
+    .getByLabel("分源 HTTP / HTTPS 代理", { exact: true })
+    .fill("http://localhost:7891");
+  await page
+    .getByLabel("分源搜索规则（search_rules）", { exact: false })
+    .fill("{");
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("JSON 格式无效");
+  assert.equal(engineSaves, 0);
+  await page
+    .getByLabel("分源搜索规则（search_rules）", { exact: false })
+    .fill('{"MiguMusicClient":{"quality":"keep"}}');
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await expect(
+    page.locator(".settings-save").getByRole("status"),
+  ).toContainText("全部设置已保存并生效");
+  assert.equal(engineConfig.global_client_cfg.search_size_per_page, 25);
+  assert.equal(engineConfig.global_client_cfg.max_retries, 5);
+  assert.equal(engineConfig.global_client_cfg.enable_search_curl_cffi, true);
+  assert.deepEqual(engineConfig.global_client_cfg.default_parse_cookies, {
+    preserve: "yes",
+  });
+  assert.equal(engineConfig.default_threads, 12);
+  assert.equal(engineConfig.request_timeout, 0);
+  assert.deepEqual(engineConfig.proxy_sources, ["GDStudioMusicClient"]);
+  assert.deepEqual(engineConfig.cookies.MiguMusicClient, { fixture: "keep" });
+  assert.deepEqual(engineConfig.init_music_clients_cfg.MiguMusicClient, {
+    maintain_session: true,
+  });
+  assert.equal(engineConfig.clients_threadings.MiguMusicClient, 7);
+  assert.equal(engineConfig.clients_threadings.NeteaseMusicClient, 9);
+  assert.equal(engineConfig.cookies.NeteaseMusicClient, "fixture=netease");
+  assert.deepEqual(engineConfig.requests_overrides.NeteaseMusicClient.proxies, {
+    http: "http://localhost:7891",
+    https: "http://localhost:7891",
+  });
+  assert.deepEqual(engineConfig.requests_overrides.MiguMusicClient.headers, {
+    "X-Custom": "keep",
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({
+    path: "../output/test-ui-settings.png",
+    fullPage: true,
+    style: ".player, #toast { visibility: hidden; }",
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: "../output/test-ui-settings-mobile.png",
+    fullPage: true,
+    style: ".player, #toast { visibility: hidden; }",
+  });
+  assert.ok(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
   await page.reload();
   await page.waitForFunction(
     () => document.documentElement.dataset.theme === "light",

@@ -1,4 +1,5 @@
 import { Cover, Button, Lyrics, Modal } from "./components";
+import { EngineSettings } from "./EngineSettings";
 import { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
@@ -17,7 +18,6 @@ import {
   Expand,
   Plus,
   X,
-  Check,
   Info,
   ArrowLeft,
   ArrowRight,
@@ -28,7 +28,6 @@ import {
   Moon,
   Monitor,
   History,
-  MoreHorizontal,
 } from "lucide-react";
 import { api } from "./api";
 import { parseLrc, clock, type LyricLine } from "./lyrics";
@@ -112,7 +111,6 @@ export function App() {
     [sort, setSort] = useState("relevance"),
     [selected, setSelected] = useState<Set<string>>(new Set());
   const sources = config?.available_sources || defaultSources;
-  const [engineConfig, setEngineConfig] = useState("");
   const [favorites, setFavorites] = useState<Track[]>([]),
     [playlist, setPlaylist] = useState<Track[]>([]),
     [jobs, setJobs] = useState<DownloadJob[]>([]),
@@ -632,7 +630,7 @@ export function App() {
             <option value="duration">时长</option>
           </select>
         </div>
-        <table>
+        <table className="track-table">
           <thead>
             <tr>
               <th>
@@ -654,9 +652,13 @@ export function App() {
               </th>
               <th>曲目 / 专辑</th>
               <th>音源</th>
-              <th>音质版本</th>
+              <th>曲目版本</th>
+              <th>大小</th>
               <th>时长</th>
-              <th>操作</th>
+              <th>收藏</th>
+              <th>播放</th>
+              <th>下载</th>
+              <th>加入播放列表</th>
             </tr>
           </thead>
           <tbody>
@@ -705,14 +707,17 @@ export function App() {
                     </div>
                   </div>
                 </td>
-                <td>{sources.find((s) => s.id === track.source)?.label}</td>
-                <td>
+                <td className="track-source" data-label="音源">
+                  {sources.find((s) => s.id === track.source)?.label ||
+                    track.source}
+                </td>
+                <td className="track-versions" data-label="曲目版本">
                   <button
                     className="quality"
                     aria-label={`选择 ${track.title} 下载版本`}
                     onClick={() => chooseDownload([track])}
                   >
-                    {track.qualities.slice(0, 3).map((q) => (
+                    {track.qualities.map((q) => (
                       <span
                         className={`badge ${q.lossless ? "flac" : ""}`}
                         title={
@@ -740,66 +745,58 @@ export function App() {
                         : track.playback.detail || "暂不可试听"}
                   </small>
                 </td>
-                <td className="duration">
+                <td className="track-size" data-label="大小">
+                  {track.size_bytes != null
+                    ? bytes(track.size_bytes)
+                    : track.size_label || "未知"}
+                </td>
+                <td className="duration" data-label="时长">
                   {track.duration ? clock(track.duration) : "—"}
                 </td>
-                <td>
-                  <div className="row-actions">
-                    <button
-                      className="row-play"
-                      aria-label={`播放 ${track.title}`}
-                      onClick={() => void play(track)}
-                    >
-                      <Play />
-                    </button>
-                    <button
-                      className={`icon-button favorite ${favIds.has(track.id) ? "on" : ""}`}
-                      aria-label={`收藏 ${track.title}`}
-                      onClick={() => void favorite(track)}
-                    >
-                      <Heart />
-                    </button>
-                    <details className="track-menu">
-                      <summary aria-label={`更多操作 ${track.title}`}>
-                        <MoreHorizontal />
-                      </summary>
-                      <div>
-                        <button
-                          onClick={(e) => {
-                            void addToPlaylist([track]);
-                            e.currentTarget
-                              .closest("details")
-                              ?.removeAttribute("open");
-                          }}
-                        >
-                          <Plus />
-                          加入播放列表
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            chooseDownload([track]);
-                            e.currentTarget
-                              .closest("details")
-                              ?.removeAttribute("open");
-                          }}
-                        >
-                          <Download />
-                          选择下载版本
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            void favorite(track);
-                            e.currentTarget
-                              .closest("details")
-                              ?.removeAttribute("open");
-                          }}
-                        >
-                          <Heart />
-                          {favIds.has(track.id) ? "取消收藏" : "收藏曲目"}
-                        </button>
-                      </div>
-                    </details>
-                  </div>
+                <td className="track-action">
+                  <button
+                    className={`icon-button favorite ${favIds.has(track.id) ? "on" : ""}`}
+                    aria-label={`收藏 ${track.title}`}
+                    title={favIds.has(track.id) ? "取消收藏" : "收藏"}
+                    aria-pressed={favIds.has(track.id)}
+                    onClick={() => void favorite(track)}
+                  >
+                    <Heart />
+                    <span>收藏</span>
+                  </button>
+                </td>
+                <td className="track-action">
+                  <button
+                    className="row-play"
+                    aria-label={`播放 ${track.title}`}
+                    title="播放"
+                    onClick={() => void play(track)}
+                  >
+                    <Play />
+                    <span>播放</span>
+                  </button>
+                </td>
+                <td className="track-action">
+                  <button
+                    className="icon-button"
+                    aria-label={`下载 ${track.title}`}
+                    title="下载"
+                    onClick={() => chooseDownload([track])}
+                  >
+                    <Download />
+                    <span>下载</span>
+                  </button>
+                </td>
+                <td className="track-action">
+                  <button
+                    className="icon-button"
+                    aria-label={`加入播放列表 ${track.title}`}
+                    title="加入播放列表"
+                    onClick={() => void addToPlaylist([track])}
+                  >
+                    <Plus />
+                    <span>加入播放列表</span>
+                  </button>
                 </td>
               </tr>
             ))}
@@ -1676,313 +1673,7 @@ export function App() {
           )}
           {view === "settings" && config && (
             <section className="view">
-              <form
-                className="settings-form"
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  setBusy(true);
-                  try {
-                    const result = await api<{ restart_required: boolean }>(
-                      "/config",
-                      "PUT",
-                      config,
-                    );
-                    setNotice(
-                      result.restart_required
-                        ? "已保存，下载并发将在重启服务后生效"
-                        : "设置已保存",
-                    );
-                  } catch (error) {
-                    fail(error);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                <section className="settings-section">
-                  <h2>搜索与播放</h2>
-                  {config.engine && (
-                    <p>
-                      {config.engine} · 完整音源与原版解析 · {sources.length}{" "}
-                      个音源可选
-                    </p>
-                  )}
-                  <div className="settings-grid">
-                    <label>
-                      每个音源结果数
-                      <input
-                        type="number"
-                        min="1"
-                        max="50"
-                        value={config.results_per_source}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            results_per_source: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      音源单次请求超时（秒）
-                      <input
-                        type="number"
-                        min="3"
-                        max="120"
-                        value={config.search_timeout_seconds}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            search_timeout_seconds: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                    {!config.engine && (
-                      <label>
-                        试听解析超时（秒）
-                        <input
-                          type="number"
-                          min="2"
-                          max="20"
-                          value={config.playback_timeout_seconds}
-                          onChange={(e) =>
-                            setConfig({
-                              ...config,
-                              playback_timeout_seconds: Number(e.target.value),
-                            })
-                          }
-                        />
-                      </label>
-                    )}
-                  </div>
-                </section>
-                <section className="settings-section">
-                  <h2>下载与音乐库</h2>
-                  <div className="settings-grid">
-                    {!config.engine && (
-                      <label>
-                        下载并发（重启生效）
-                        <input
-                          type="number"
-                          min="1"
-                          max="4"
-                          value={config.download_concurrency}
-                          onChange={(e) =>
-                            setConfig({
-                              ...config,
-                              download_concurrency: Number(e.target.value),
-                            })
-                          }
-                        />
-                      </label>
-                    )}
-                    <label>
-                      目录组织
-                      <select
-                        value={config.download_layout}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            download_layout: e.target.value,
-                          })
-                        }
-                      >
-                        {[
-                          ["artist_album", "歌手 / 专辑"],
-                          ["artist", "歌手"],
-                          ["source", "音源"],
-                          ["flat", "平铺"],
-                        ].map(([id, label]) => (
-                          <option value={id} key={id}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      歌词保存
-                      <select
-                        value={config.lyrics_mode}
-                        onChange={(e) =>
-                          setConfig({ ...config, lyrics_mode: e.target.value })
-                        }
-                      >
-                        {[
-                          ["both", "LRC 文件与嵌入"],
-                          ["lrc", "LRC 文件"],
-                          ["embed", "嵌入音频"],
-                          ["none", "不保存"],
-                        ].map(([id, label]) => (
-                          <option value={id} key={id}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  {!config.engine && (
-                    <label className="check-label">
-                      <input
-                        type="checkbox"
-                        checked={config.embed_metadata}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            embed_metadata: e.target.checked,
-                          })
-                        }
-                      />
-                      写入曲名、歌手、专辑标签（需要 FFmpeg）
-                    </label>
-                  )}
-                  <p>
-                    音乐目录与下载并发由服务配置管理；歌曲交给对应音源的下载器处理。
-                  </p>
-                </section>
-                <section className="settings-section">
-                  <h2>全部音源与解析设置</h2>
-                  <p>
-                    各音源保留原版解析方式。Cookie
-                    为可选项，仅在对应音源需要时填写；无法试听的结果仍可交给原下载器处理。
-                  </p>
-                  {sources.map((source) => {
-                    const setting = config.source_settings[source.id] || {
-                      cookie: "",
-                      proxy: "",
-                    };
-                    return (
-                      <details key={source.id} className="source-setting">
-                        <summary>
-                          <span>{source.label}</span>
-                          <label
-                            className="check-label"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={config.sources.includes(source.id)}
-                              onChange={(e) =>
-                                setConfig({
-                                  ...config,
-                                  sources: e.target.checked
-                                    ? [...config.sources, source.id]
-                                    : config.sources.filter(
-                                        (s) => s !== source.id,
-                                      ),
-                                })
-                              }
-                            />
-                            参与搜索
-                          </label>
-                        </summary>
-                        <label>
-                          Cookie
-                          <textarea
-                            autoComplete="off"
-                            spellCheck={false}
-                            value={setting.cookie}
-                            onChange={(e) =>
-                              setConfig({
-                                ...config,
-                                source_settings: {
-                                  ...config.source_settings,
-                                  [source.id]: {
-                                    ...setting,
-                                    cookie: e.target.value,
-                                  },
-                                },
-                              })
-                            }
-                            placeholder="未配置账号"
-                          />
-                        </label>
-                        <label>
-                          HTTP / HTTPS 代理
-                          <input
-                            value={setting.proxy}
-                            onChange={(e) =>
-                              setConfig({
-                                ...config,
-                                source_settings: {
-                                  ...config.source_settings,
-                                  [source.id]: {
-                                    ...setting,
-                                    proxy: e.target.value,
-                                  },
-                                },
-                              })
-                            }
-                            placeholder="http://127.0.0.1:7890"
-                          />
-                        </label>
-                      </details>
-                    );
-                  })}
-                </section>
-                {config.engine && (
-                  <section className="settings-section">
-                    <h2>原版高级配置</h2>
-                    <p>
-                      保留全局与分源参数、解析规则、请求覆盖、线程数、代理范围及专用解析器配置。
-                    </p>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => {
-                        void api<Record<string, unknown>>("/engine/config")
-                          .then((value) =>
-                            setEngineConfig(JSON.stringify(value, null, 2)),
-                          )
-                          .catch(fail);
-                      }}
-                    >
-                      读取完整配置
-                    </button>
-                    {engineConfig && (
-                      <>
-                        <label>
-                          原版配置 JSON
-                          <textarea
-                            rows={16}
-                            spellCheck={false}
-                            value={engineConfig}
-                            onChange={(event) =>
-                              setEngineConfig(event.target.value)
-                            }
-                          />
-                        </label>
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={async () => {
-                            try {
-                              await api(
-                                "/engine/config",
-                                "PUT",
-                                JSON.parse(engineConfig),
-                              );
-                              await load();
-                              setNotice("原版完整配置已保存");
-                            } catch (error) {
-                              fail(error);
-                            }
-                          }}
-                        >
-                          保存完整配置
-                        </button>
-                      </>
-                    )}
-                  </section>
-                )}
-                <button
-                  className="primary"
-                  disabled={busy || !config.sources.length}
-                >
-                  <Check />
-                  {busy ? "正在保存…" : "保存设置"}
-                </button>
-              </form>
+              <EngineSettings sources={sources} saved={load} />
             </section>
           )}
           <footer className="player">

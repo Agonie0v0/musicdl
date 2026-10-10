@@ -93,7 +93,7 @@ def test_config_concurrency_values_are_bounded():
     cfg['clients_threadings'] = {'DemoMusicClient': 5000}
     normalized = app.normalizeconfigpaths(cfg)
     assert normalized['default_threads'] == 50
-    assert normalized['request_timeout'] == 1
+    assert normalized['request_timeout'] == 0
     assert normalized['clients_threadings']['DemoMusicClient'] == 50
 
 

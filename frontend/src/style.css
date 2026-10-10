@@ -1815,51 +1815,6 @@ dialog::backdrop {
   color: var(--muted);
   white-space: nowrap;
 }
-.track-menu {
-  position: relative;
-}
-.track-menu summary {
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  list-style: none;
-}
-.track-menu summary::-webkit-details-marker {
-  display: none;
-}
-.track-menu summary:hover {
-  background: var(--soft);
-  color: var(--accent);
-}
-.track-menu > div {
-  position: absolute;
-  right: 0;
-  top: 32px;
-  width: 170px;
-  padding: 6px;
-  z-index: 5;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
-  border-radius: 10px;
-}
-.track-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px;
-  width: 100%;
-  text-align: left;
-  border-radius: 5px;
-  font-size: 12px;
-}
-.track-menu button:hover {
-  background: var(--soft);
-}
 .collection-shelf {
   margin: 28px 0;
 }
@@ -1921,5 +1876,238 @@ dialog::backdrop {
   .collection-covers .record-fallback svg {
     width: 15px;
     height: 15px;
+  }
+}
+
+/* Result columns retain every action and every provider field at all widths. */
+.track-table th {
+  width: auto;
+}
+.track-table th:first-child {
+  width: 28px;
+}
+.track-table th:nth-child(3) {
+  width: 72px;
+}
+.track-table th:nth-child(4) {
+  width: 110px;
+}
+.track-table th:nth-child(5) {
+  width: 62px;
+}
+.track-table th:nth-child(6) {
+  width: 46px;
+}
+.track-table th:nth-child(7),
+.track-table th:nth-child(8),
+.track-table th:nth-child(9) {
+  width: 38px;
+  padding: 10px 2px;
+}
+.track-table th:last-child {
+  width: 86px;
+  text-align: center;
+  padding: 10px 2px;
+}
+.track-table .track-action {
+  text-align: center;
+  padding: 12px 2px;
+}
+.track-action button {
+  margin: auto;
+}
+.track-action button span {
+  display: none;
+}
+.track-table .track-size {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.track-table .duration {
+  white-space: nowrap;
+  padding-left: 2px;
+  padding-right: 2px;
+  font-size: 11px;
+}
+.source-picker {
+  border: 1px solid var(--line);
+  padding: 15px;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 15px;
+}
+.source-picker legend {
+  padding: 0 8px;
+  font-size: 12px;
+}
+.source-picker .check-label {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.source-picker-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 18px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.engine-switches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px 24px;
+}
+.engine-switches .check-label {
+  margin: 0;
+  align-items: flex-start;
+}
+.engine-switches input {
+  margin-top: 3px;
+  flex: none;
+}
+.engine-switches small,
+.setting-help {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+}
+.config-editor {
+  font:
+    12px/1.7 Consolas,
+    monospace;
+}
+.settings-save {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.settings-save p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent);
+}
+.settings-save p[role="alert"] {
+  color: var(--danger);
+}
+@media (max-width: 800px) {
+  .source-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .engine-switches {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 900px) {
+  .track-table {
+    display: block;
+  }
+  .track-table thead {
+    display: none;
+  }
+  .track-table tbody {
+    display: block;
+  }
+  .track-table tr {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px 8px;
+    padding: 14px 12px 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    background: var(--surface);
+  }
+  .track-table tr.current,
+  .track-table tr.selected {
+    background: var(--soft);
+  }
+  .track-table td {
+    display: block;
+    width: auto;
+    border: 0;
+    padding: 0;
+  }
+  .track-table td:first-child {
+    position: absolute;
+    left: 12px;
+    top: 16px;
+    padding: 0;
+  }
+  .track-table td:nth-child(2) {
+    grid-column: 1/-1;
+    padding-left: 26px;
+  }
+  .track-table .track-source,
+  .track-table .track-versions {
+    grid-column: 1/-1;
+    padding-left: 26px;
+  }
+  .track-table .track-source {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 5px;
+  }
+  .track-table .track-size {
+    grid-column: 1/3;
+    padding-left: 26px;
+  }
+  .track-table .duration {
+    grid-column: 3/5;
+    font-size: 11px;
+  }
+  .track-table .track-action {
+    display: flex;
+    border-top: 1px solid var(--line);
+    padding: 9px 0 0;
+    margin-top: 5px;
+  }
+  .track-table .track-action button {
+    width: 100%;
+    height: 44px;
+    border-radius: 6px;
+    display: flex;
+    gap: 4px;
+    padding: 4px 2px;
+    justify-content: center;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .track-action button span {
+    display: inline;
+  }
+  .track-action svg {
+    width: 14px;
+    height: 14px;
+  }
+  .track-table .favorite {
+    display: flex;
+  }
+  .track-table .track .cover {
+    width: 42px;
+    height: 42px;
+  }
+  .track-table .readiness {
+    max-width: none;
+    font-size: 10px;
+  }
+  .track-table .badge {
+    font-size: 10px;
+  }
+  .track-table .track-size::before {
+    content: "大小 ";
+  }
+  .track-table .duration::before {
+    content: "时长 ";
+  }
+  .source-picker {
+    grid-template-columns: 1fr;
   }
 }

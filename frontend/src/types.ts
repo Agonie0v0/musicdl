@@ -16,6 +16,8 @@ export interface Track {
   album: string;
   duration: number;
   cover: string | null;
+  size_bytes?: number | null;
+  size_label?: string | null;
   episodes?: number;
   root_source?: string;
   qualities: Quality[];
@@ -29,7 +31,12 @@ export interface Track {
   };
 }
 export interface Config {
-  available_sources?: { id: string; label: string; category?: string }[];
+  available_sources?: {
+    id: string;
+    label: string;
+    category?: string;
+    engine_name?: string;
+  }[];
   engine?: string;
   sources: string[];
   results_per_source: number;

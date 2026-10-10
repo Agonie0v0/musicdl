@@ -249,7 +249,7 @@ def normalizeconfigpaths(cfg: dict) -> dict:
     global_cfg = cfg.setdefault('global_client_cfg', {})
     global_cfg['work_dir'] = str(_resolve_allowed_workdir(global_cfg.get('work_dir')))
     cfg['default_threads'] = _bounded_int(cfg.get('default_threads'), 5, 1, 50)
-    cfg['request_timeout'] = _bounded_int(cfg.get('request_timeout'), 30, 1, 120)
+    cfg['request_timeout'] = _bounded_int(cfg.get('request_timeout'), 30, 0, 300)
     raw_threadings = cfg.get('clients_threadings')
     if not isinstance(raw_threadings, dict):
         raw_threadings = {}
@@ -616,7 +616,7 @@ class ConfigBody(BaseModel):
     proxy_url: str = ''
     proxy_scope: str = 'all'
     proxy_sources: list[str] = []
-    request_timeout: int = Field(default=30, ge=1, le=120)
+    request_timeout: int = Field(default=30, ge=0, le=300)
     default_threads: int = Field(default=5, ge=1, le=50)
     download_layout: str = 'source'
     lyrics_mode: str = 'both'
