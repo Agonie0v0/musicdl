@@ -60,11 +60,16 @@ jobs:
 
       - name: 验证已发布镜像可启动
         run: |
+          sudo mkdir -p /tmp/musicdl-smoke/data/engine /tmp/musicdl-smoke/music
+          sudo chmod 755 /tmp/musicdl-smoke/data /tmp/musicdl-smoke/data/engine /tmp/musicdl-smoke/music
           docker run -d --name musicdl-smoke -p 127.0.0.1:18765:8765 \
+            -v /tmp/musicdl-smoke/data:/data -v /tmp/musicdl-smoke/music:/music \
             -e MUSICDL_USER=smoke -e MUSICDL_PASS=smoke-test-password \
             ghcr.io/agonie0v0/musicdl:sha-${GITHUB_SHA}
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:18765/api/health | grep -q '"backend":"original-musicdl"'; then
+              docker exec musicdl-smoke python -c "from pathlib import Path; s=Path('/proc/1/status').read_text(); assert 'Uid:\t10001\t10001\t10001\t10001' in s; assert Path('/data/musicdl.db').exists()"
+              docker exec --user 10001:10001 musicdl-smoke python -c "from pathlib import Path; Path('/music/write-check').write_text('ok')"
               docker logs musicdl-smoke --tail 30
               exit 0
             fi

@@ -45,8 +45,6 @@ services:
 
 ```sh
 mkdir -p music data
-# Linux 上给程序设置目录写入权限；Windows 跳过这一行
-sudo chown 10001:10001 music data
 docker compose up -d
 ```
 
@@ -55,7 +53,7 @@ docker compose up -d
 - `music` 文件夹保存下载的音乐和歌词。
 - `data` 文件夹保存收藏、播放列表、下载记录和配置。SQLite 数据文件自动创建，无需安装或配置数据库。
 
-更新、重建容器时保留这两个文件夹即可。
+更新、重建容器时保留这两个文件夹即可。镜像启动时自动调整数据目录和音乐根目录的所有者，再以普通用户（UID/GID `10001:10001`）运行应用，通常无需手动执行 `chown`。已有音乐库内的文件和子目录不会被递归修改；共享目录如有额外 ACL 限制，需要允许该用户写入。
 
 更新与查看日志：
 
@@ -85,8 +83,6 @@ services:
       # HTTPS_PROXY: http://你的代理地址:7890
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
     stop_grace_period: 30s
 ```
 
