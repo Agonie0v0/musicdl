@@ -21,17 +21,6 @@ jobs:
       - run: npm run build --prefix frontend
       - run: python -m pytest tests/test_engine_compat.py -q
       - run: python -m pytest legacy/tests/test_app.py -q
-  rust:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
-      - run: cargo +1.99.0 fmt --check
-      - run: cargo +1.99.0 test --locked
-      - run: cargo +1.99.0 clippy --locked --all-targets -- -D warnings
   frontend:
     runs-on: ubuntu-latest
     defaults:

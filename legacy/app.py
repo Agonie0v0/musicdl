@@ -29,8 +29,7 @@ from urllib.parse import urlsplit
 
 import requests as pyrequests
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import secrets
@@ -626,11 +625,6 @@ class ConfigBody(BaseModel):
     clients_threadings: dict = {}
     requests_overrides: dict = {}
     search_rules: dict = {}
-
-
-@app.get('/')
-def index():
-    return RedirectResponse('/static/index.html')
 
 
 @app.get('/api/meta')
@@ -1329,9 +1323,6 @@ def logs():
 def clearlogs():
     LOGS.clear()
     return {'ok': True}
-
-
-app.mount('/static', StaticFiles(directory=Path(__file__).resolve().parent / 'static'), name='static')
 
 
 if __name__ == '__main__':

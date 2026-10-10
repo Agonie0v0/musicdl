@@ -16,4 +16,5 @@ __pycache__/
 .env
 .env.*
 legacy/tests/
-output/releases/
+logs/
+.pytest_cache/
