@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chromium } from "@playwright/test";
+import { chromium, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 const base = "http://127.0.0.1:18766";
@@ -304,11 +304,7 @@ try {
   await page.screenshot({ path: "../output/test-ui-search-dark.png" });
   await page.getByLabel("界面主题").selectOption("light");
   await page.keyboard.press("Control+k");
-  assert.ok(
-    await page
-      .getByLabel("搜索音乐", { exact: true })
-      .evaluate((e) => e === document.activeElement),
-  );
+  await expect(page.getByLabel("搜索音乐", { exact: true })).toBeFocused();
   for (const width of [390, 768, 1440]) {
     await page.setViewportSize({ width, height: 844 });
     assert.ok(
@@ -324,6 +320,8 @@ try {
   await page.getByRole("dialog").getByLabel("关闭", { exact: true }).click();
   await page.getByRole("button", { name: "正在播放", exact: true }).click();
   await page.locator(".full-lyrics button").nth(2).click();
+  await expect(page.getByLabel("切换随机播放", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("切换列表循环", { exact: true })).toBeVisible();
   await page.waitForFunction(() =>
     document
       .querySelector(".full-lyrics button.active")
