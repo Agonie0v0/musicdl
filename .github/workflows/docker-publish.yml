@@ -39,7 +39,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/agonie0v0/musicdl-full-engine
+          images: ghcr.io/agonie0v0/musicdl
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
@@ -62,7 +62,7 @@ jobs:
         run: |
           docker run -d --name musicdl-smoke -p 127.0.0.1:18765:8765 \
             -e MUSICDL_USER=smoke -e MUSICDL_PASS=smoke-test-password \
-            ghcr.io/agonie0v0/musicdl-full-engine:sha-${GITHUB_SHA}
+            ghcr.io/agonie0v0/musicdl:sha-${GITHUB_SHA}
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:18765/api/health | grep -q '"backend":"original-musicdl"'; then
               docker logs musicdl-smoke --tail 30

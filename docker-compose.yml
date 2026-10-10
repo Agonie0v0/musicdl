@@ -4,7 +4,7 @@
 # 下载文件按界面设置组织目录，navidrome 扫描同一音乐目录即可入库。
 services:
   musicdl-webui:
-    image: ghcr.io/agonie0v0/musicdl-full-engine:latest
+    image: ghcr.io/agonie0v0/musicdl:latest
     pull_policy: always
     restart: unless-stopped
     init: true

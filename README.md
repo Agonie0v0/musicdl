@@ -14,22 +14,26 @@
 
 ## Docker 部署
 
-镜像：`ghcr.io/agonie0v0/musicdl-full-engine:latest`，支持 `linux/amd64` 和 `linux/arm64`，包含 FFmpeg。
+镜像：`ghcr.io/agonie0v0/musicdl:latest`，支持 `linux/amd64` 和 `linux/arm64`，包含 FFmpeg。
 
-镜像当前为私有包。拉取前使用具有 `read:packages` 权限的 GitHub classic token 登录 GHCR，提示输入密码时粘贴 token：
-
-```sh
-docker login ghcr.io -u YOUR_GITHUB_USERNAME
-```
-
-获取本仓库的 `docker-compose.yml` 和 `.env.example`，放在同一目录，然后：
+公开镜像可以直接拉取，无需 GitHub 账号或登录 GHCR。使用 Docker Compose 部署：
 
 ```sh
+git clone https://github.com/Agonie0v0/musicdl.git
+cd musicdl
 cp .env.example .env
 # 编辑 .env，设置自己的用户名、密码和访问主机名
 mkdir -p music data
+```
+
+容器以 UID/GID `10001:10001` 运行，挂载目录必须允许该用户读写。在 Linux 上为新建目录设置所有者后启动：
+
+```sh
+sudo chown 10001:10001 music data
 docker compose up -d
 ```
+
+也可以只下载本仓库的 `docker-compose.yml` 和 `.env.example`，放在同一目录后按以上步骤配置和启动。
 
 默认访问 `http://127.0.0.1:8765`。允许其他设备访问时，在 `.env` 中设置 `MUSICDL_BIND=0.0.0.0`，并将服务器 IP 或域名加入 `MUSICDL_TRUSTED_HOSTS`，同时保留 `localhost,127.0.0.1`。主机端口通过 `MUSICDL_HOST_PORT` 设置。
 
@@ -37,12 +41,6 @@ docker compose up -d
 | --- | --- |
 | `./music` → `/music` | 下载的音乐与歌词 |
 | `./data` → `/data` | 数据库、配置和原曲目对象 |
-
-容器使用 UID/GID `10001:10001`，挂载目录必须允许该用户读写。在 Linux 上可为新建目录设置所有者：
-
-```sh
-sudo chown 10001:10001 music data
-```
 
 更新与查看日志：
 
@@ -54,7 +52,7 @@ docker compose logs -f --tail 100
 需要从源码构建镜像时：
 
 ```sh
-docker build -t ghcr.io/agonie0v0/musicdl-full-engine:latest .
+docker build -t ghcr.io/agonie0v0/musicdl:latest .
 docker compose up -d --pull never
 ```
 
