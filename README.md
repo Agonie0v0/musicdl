@@ -16,33 +16,46 @@
 
 镜像：`ghcr.io/agonie0v0/musicdl:latest`，支持 `linux/amd64` 和 `linux/arm64`，包含 FFmpeg。
 
-公开镜像可以直接拉取，无需 GitHub 账号或登录 GHCR。使用 Docker Compose 部署：
+无需登录镜像仓库，也不需要创建 `.env`。新建一个文件夹，将下面的内容保存为 `docker-compose.yml`：
 
-```sh
-git clone https://github.com/Agonie0v0/musicdl.git
-cd musicdl
-cp .env.example .env
-# 编辑 .env，设置自己的用户名和密码
-mkdir -p music data
+```yaml
+services:
+  musicdl-webui:
+    image: ghcr.io/agonie0v0/musicdl:latest
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./music:/music
+      - ./data:/data
+    environment:
+      MUSICDL_USER: admin
+      MUSICDL_PASS: '请改成你自己的密码'
+      # 将 192.168.1.100 改为运行本服务的电脑或服务器 IP
+      MUSICDL_TRUSTED_HOSTS: 'localhost,127.0.0.1,192.168.1.100'
 ```
 
-容器以 UID/GID `10001:10001` 运行，挂载目录必须允许该用户读写。在 Linux 上为新建目录设置所有者后启动：
+启动前修改两处：
+
+1. 把 `请改成你自己的密码` 换成你的登录密码，保留两边的单引号。密码中如需使用 `$`，在 Compose 中写成 `$$`。
+2. 把 `192.168.1.100` 换成服务器的 IP；在同一台电脑上访问时可以保留示例。通过域名访问时，将域名加入这行，用逗号分隔。
+
+在这个文件所在目录执行：
 
 ```sh
+mkdir -p music data
+# Linux 上给程序设置目录写入权限；Windows 跳过这一行
 sudo chown 10001:10001 music data
 docker compose up -d
 ```
 
-也可以只下载本仓库的 `docker-compose.yml` 和 `.env.example`，放在同一目录后按以上步骤配置和启动。
+打开 `http://服务器IP:8765`，同一台电脑可打开 `http://localhost:8765`。用户名为 `admin`，密码为你刚填写的密码。需要换端口时，将 `8765:8765` 左边的数字改掉，例如 `8888:8765`，然后通过端口 `8888` 访问。
 
-默认访问 `http://127.0.0.1:8765`。允许其他设备访问时，在 `.env` 中设置 `MUSICDL_BIND=0.0.0.0`，并将服务器 IP 或域名加入 `MUSICDL_TRUSTED_HOSTS`，同时保留 `localhost,127.0.0.1`。主机端口通过 `MUSICDL_HOST_PORT` 设置。
+- `music` 文件夹保存下载的音乐和歌词。
+- `data` 文件夹保存收藏、播放列表、下载记录和配置。SQLite 数据文件自动创建，无需安装或配置数据库。
 
-| 挂载目录 | 用途 |
-| --- | --- |
-| `./music` → `/music` | 下载的音乐与歌词 |
-| `./data` → `/data` | 收藏、播放列表、下载记录及配置 |
-
-只运行一个应用容器，不需要部署 MySQL、PostgreSQL 或其他数据库服务。SQLite 是程序在 `data` 目录自动创建的本地文件，用于保存收藏、播放列表和下载记录；保留这个目录，重建容器后仍能使用原来的记录。`init: true` 用于回收搜索和下载的子进程。
+更新、重建容器时保留这两个文件夹即可。
 
 更新与查看日志：
 
@@ -99,7 +112,7 @@ sh start.sh
 
 ## 配置和登录
 
-复制 `.env.example` 为 `.env` 后修改配置。源码在本机回环地址运行时可以不配置登录；同时设置 `MUSICDL_USER` 和 `MUSICDL_PASS` 就启用认证，非回环监听必须配置认证。没有通用默认密码，示例密码请自行替换。
+Docker 用户直接修改 Compose 中的 `environment`，执行 `docker compose up -d` 应用更改。源码运行时可复制 `.env.example` 为 `.env` 后修改配置。本机回环地址运行时可以不配置登录；同时设置 `MUSICDL_USER` 和 `MUSICDL_PASS` 就启用认证，非回环监听必须配置认证。没有通用默认密码，示例密码请自行替换。
 
 | 环境变量 | 说明 |
 | --- | --- |
@@ -107,7 +120,6 @@ sh start.sh
 | `MUSICDL_TRUSTED_HOSTS` | 允许访问的域名/IP，以逗号分隔，不包含协议和端口 |
 | `MUSICDL_COOKIE_SECURE` | HTTP 设为 `0`，HTTPS 设为 `1` |
 | `MUSICDL_HOST` / `MUSICDL_PORT` | 服务监听地址和端口，默认 `127.0.0.1:8765` |
-| `MUSICDL_BIND` / `MUSICDL_HOST_PORT` | Compose 的宿主机端口映射配置 |
 | `MUSICDL_DOWNLOAD_DIR` | 音乐目录，源码默认 `musicdl_outputs`，Docker 为 `/music` |
 | `MUSICDL_DATA_DIR` | 数据目录，源码默认 `data`，Docker 为 `/data` |
 | `MUSICDL_CONFIG` | 原版配置路径，源码默认 `config.json`，Docker 为 `/data/config.json` |

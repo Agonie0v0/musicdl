@@ -4,12 +4,12 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "${MUSICDL_BIND:-127.0.0.1}:${MUSICDL_HOST_PORT:-8765}:8765"
+      - "8765:8765"
     volumes:
       - ./music:/music
       - ./data:/data
     environment:
-      MUSICDL_USER: "${MUSICDL_USER:?请在 .env 中设置 MUSICDL_USER}"
-      MUSICDL_PASS: "${MUSICDL_PASS:?请在 .env 中设置 MUSICDL_PASS}"
-      MUSICDL_TRUSTED_HOSTS: "${MUSICDL_TRUSTED_HOSTS:-localhost,127.0.0.1}"
-      MUSICDL_COOKIE_SECURE: "${MUSICDL_COOKIE_SECURE:-0}"
+      MUSICDL_USER: admin
+      MUSICDL_PASS: '请改成你自己的密码'
+      # 将 192.168.1.100 改为运行本服务的电脑或服务器 IP
+      MUSICDL_TRUSTED_HOSTS: 'localhost,127.0.0.1,192.168.1.100'
