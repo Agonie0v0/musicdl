@@ -139,6 +139,26 @@ try {
     search_rules: { MiguMusicClient: { quality: "keep" } },
   };
   let engineSaves = 0;
+  let logFetches = 0;
+  const logEntries = [
+    {
+      id: 1,
+      time: "2026-10-10 14:00:00",
+      level: "info",
+      category: "search",
+      task_id: "search-fixture",
+      message: "网易云搜索完成，5 个结果",
+    },
+    {
+      id: 2,
+      time: "2026-10-10 14:00:01",
+      level: "error",
+      category: "download",
+      task_id: "download-fixture",
+      message:
+        "HTTP 403：下载被音源拒绝\nTraceback: provider.py line 42\n请检查音源配置",
+    },
+  ];
   let favorites = [],
     playlist = [],
     jobs = [];
@@ -161,7 +181,10 @@ try {
       method = request.method();
     let result;
     if (p === "/auth/status") result = { authenticated: true, required: false };
-    else if (p === "/config")
+    else if (p === "/logs") {
+      logFetches++;
+      result = { logs: logEntries };
+    } else if (p === "/config")
       result =
         method === "PUT" ? { saved: true, restart_required: false } : cfg;
     else if (p === "/engine/config") {
@@ -199,7 +222,7 @@ try {
     } else if (p.startsWith("/downloads/job-1/")) {
       jobs[0].status = p.endsWith("/pause")
         ? "paused"
-        : p.endsWith("/retry")
+        : p.endsWith("/retry") || p.endsWith("/resume")
           ? "downloading"
           : "cancelled";
       result = jobs[0];
@@ -262,6 +285,29 @@ try {
     .getByRole("button", { name: "播放 测试曲目", exact: true })
     .waitFor();
   assert.equal(await page.locator("tbody tr").count(), 1);
+  await page.getByRole("button", { name: "仅无损", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "仅无损", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel("仅可试听", { exact: true }).check();
+  assert.equal(await page.locator("tbody tr").count(), 1);
+  await page.getByRole("button", { name: "音质未知", exact: true }).click();
+  assert.equal(await page.locator("tbody tr").count(), 0);
+  await page.getByRole("button", { name: "全部", exact: true }).click();
+  await page.getByLabel("仅可试听", { exact: true }).uncheck();
+  for (const sort of [
+    "size-desc",
+    "size-asc",
+    "quality-desc",
+    "quality-asc",
+    "artist",
+    "source",
+    "duration-desc",
+  ]) {
+    await page.getByLabel("结果排序").selectOption(sort);
+    assert.equal(await page.locator("tbody tr").count(), 1);
+  }
+  await page.getByLabel("结果排序").selectOption("relevance");
   for (const label of [
     "收藏 测试曲目",
     "播放 测试曲目",
@@ -321,6 +367,30 @@ try {
     });
   await page.getByLabel("调整歌词字号").click();
   assert.equal(await page.locator(".full-lyrics.large").count(), 1);
+  await page.setViewportSize({ width: 2534, height: 1106 });
+  const lyricColumn = await page.locator(".lyrics-column").boundingBox();
+  const lineText = await page
+    .locator(".full-lyrics button span")
+    .nth(1)
+    .boundingBox();
+  assert.ok(
+    Math.abs(
+      lineText.x + lineText.width / 2 - (lyricColumn.x + lyricColumn.width / 2),
+    ) < 12,
+    "wide lyrics centered within their column",
+  );
+  const albumSide = await page.locator(".album-column").boundingBox();
+  const fullStage = await page.locator(".playback-grid").boundingBox();
+  assert.ok(
+    albumSide.x > fullStage.x + 100,
+    "wide album is balanced within its column",
+  );
+  await page.screenshot({ path: "../output/test-ui-player-ultrawide.png" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  assert.equal(
+    await page.getByText("点击歌词可跳转到对应位置", { exact: true }).count(),
+    0,
+  );
   await mkdir("../output", { recursive: true });
   await page.screenshot({ path: "../output/test-ui-player.png" });
   await page.getByLabel("界面主题").selectOption("dark");
@@ -330,6 +400,22 @@ try {
   assert.equal(favorites.length, 1);
   await page.getByRole("button", { name: "加入播放列表", exact: true }).click();
   assert.equal(playlist.length, 1);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.screenshot({ path: "../output/test-ui-player-wide.png" });
+  const stage = await page.locator(".playback-grid").boundingBox();
+  const container = await page.locator(".full-player").boundingBox();
+  assert.ok(
+    stage.width >= container.width - 80,
+    "player should use the available width",
+  );
+  const album = await page.locator(".album-column").boundingBox();
+  const lyrics = await page.locator(".lyrics-column").boundingBox();
+  const queue = await page.locator(".album-queue").boundingBox();
+  assert.ok(
+    album.x + album.width <= lyrics.x && lyrics.x + lyrics.width <= queue.x,
+    "wide player has three aligned columns",
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole("button", { name: "选择下载音质", exact: true }).click();
   await page
     .getByRole("dialog")
@@ -341,9 +427,9 @@ try {
     .first()
     .click();
   await page.getByLabel("暂停下载").click();
-  await page.getByRole("button", { name: "重新下载", exact: true }).waitFor();
+  await page.getByRole("button", { name: "继续下载", exact: true }).waitFor();
   assert.equal(jobs[0].status, "paused");
-  await page.getByRole("button", { name: "重新下载", exact: true }).click();
+  await page.getByRole("button", { name: "继续下载", exact: true }).click();
   assert.equal(jobs[0].status, "downloading");
   await page.getByRole("button", { name: "搜索音乐", exact: true }).click();
   if (await page.getByLabel("关闭提示", { exact: true }).count())
@@ -506,6 +592,46 @@ try {
   await page.waitForFunction(
     () => document.documentElement.dataset.theme === "light",
   );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "运行日志", exact: true }).click();
+  await expect(page.getByRole("log")).toContainText("HTTP 403");
+  await page.getByLabel("日志级别").selectOption("error");
+  assert.equal(await page.locator(".log-row").count(), 1);
+  await page.getByLabel("日志类别").selectOption("search");
+  assert.equal(await page.locator(".log-row").count(), 0);
+  await page.getByLabel("日志类别").selectOption("all");
+  await page.getByLabel("搜索日志").fill("download-fixture");
+  assert.equal(await page.locator(".log-row").count(), 1);
+  const exported = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出当前日志", exact: true }).click();
+  assert.ok((await exported).suggestedFilename().endsWith(".log"));
+  await page.getByRole("button", { name: "暂停更新", exact: true }).click();
+  const frozen = logFetches;
+  await page.waitForTimeout(1100);
+  assert.equal(logFetches, frozen);
+  await page.getByLabel("搜索日志").fill("");
+  await page.getByLabel("日志级别").selectOption("all");
+  logEntries.push({
+    id: 3,
+    time: "2026-10-10 14:00:02",
+    level: "warning",
+    category: "download",
+    task_id: "download-fixture",
+    message: "网络重试，已保留下载进度",
+  });
+  await page.getByRole("button", { name: "继续更新", exact: true }).click();
+  await expect(page.getByRole("log")).toContainText("网络重试");
+  await page.screenshot({ path: "../output/test-ui-logs.png" });
+  await page.getByLabel("界面主题").selectOption("dark");
+  await page.screenshot({ path: "../output/test-ui-logs-dark.png" });
+  await page.getByLabel("界面主题").selectOption("light");
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
+  await page.screenshot({ path: "../output/test-ui-logs-mobile.png" });
   assert.deepEqual(errors, []);
   console.log(
     "Browser integration passed: search, real audio, lyric seeking, favorites, playlist, quality selection, queue controls, settings, responsive layout.",

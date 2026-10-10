@@ -1,5 +1,6 @@
 import { Cover, Button, Lyrics, Modal } from "./components";
 import { EngineSettings } from "./EngineSettings";
+import { RuntimeLogs } from "./RuntimeLogs";
 import { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
@@ -28,8 +29,10 @@ import {
   Moon,
   Monitor,
   History,
+  ScrollText,
 } from "lucide-react";
 import { api } from "./api";
+import { selectResults } from "./results";
 import { parseLrc, clock, type LyricLine } from "./lyrics";
 import type {
   Track,
@@ -53,6 +56,7 @@ const views = {
   queue: ["下载队列", "下载进度与所选音质"],
   favorites: ["我的收藏", "保存喜欢的曲目与音源"],
   files: ["音乐文件", "本地音乐库"],
+  logs: ["运行日志", "实时查看搜索、下载与报错详情"],
   settings: ["音源与设置", "账号权限、代理与下载偏好"],
 } as const;
 type View = keyof typeof views;
@@ -108,6 +112,7 @@ export function App() {
   const [config, setConfig] = useState<Config | null>(null),
     [sourceFilter, setSourceFilter] = useState("all"),
     [filter, setFilter] = useState("all"),
+    [readyOnly, setReadyOnly] = useState(false),
     [sort, setSort] = useState("relevance"),
     [selected, setSelected] = useState<Set<string>>(new Set());
   const sources = config?.available_sources || defaultSources;
@@ -227,20 +232,13 @@ export function App() {
   }, [volume]);
   currentRef.current = current;
   const favIds = new Set(favorites.map((t) => t.id));
-  const display = (view === "favorites" ? favorites : tracks)
-    .filter(
-      (track) =>
-        (sourceFilter === "all" || track.source === sourceFilter) &&
-        (filter !== "lossless" || track.qualities.some((q) => q.lossless)) &&
-        (filter !== "ready" || track.playback.state === "ready"),
-    )
-    .sort((a, b) =>
-      sort === "name"
-        ? a.title.localeCompare(b.title, "zh")
-        : sort === "duration"
-          ? a.duration - b.duration
-          : 0,
-    );
+  const display = selectResults(
+    view === "favorites" ? favorites : tracks,
+    sourceFilter,
+    filter,
+    readyOnly,
+    sort,
+  );
   async function search(keyword = query) {
     if (!keyword.trim() || !config) return;
     const generation = ++searchGeneration.current;
@@ -605,21 +603,32 @@ export function App() {
             {view === "favorites" ? "收藏曲目" : "搜索结果"}{" "}
             <span>{display.length}</span>
           </strong>
-          <div className="filter-group">
+          <div className="filter-group" role="group" aria-label="音质筛选">
             {[
               ["all", "全部"],
-              ["lossless", "含无损版本"],
-              ["ready", "可试听"],
+              ["lossless", "仅无损"],
+              ["lossy", "普通音质"],
+              ["mp3", "MP3"],
+              ["unknown", "音质未知"],
             ].map(([id, label]) => (
               <button
                 key={id}
                 className={filter === id ? "active" : ""}
+                aria-pressed={filter === id}
                 onClick={() => setFilter(id)}
               >
                 {label}
               </button>
             ))}
           </div>
+          <label className="ready-filter">
+            <input
+              type="checkbox"
+              checked={readyOnly}
+              onChange={(e) => setReadyOnly(e.target.checked)}
+            />
+            仅可试听
+          </label>
           <select
             aria-label="结果排序"
             value={sort}
@@ -627,7 +636,14 @@ export function App() {
           >
             <option value="relevance">相关度</option>
             <option value="name">曲名</option>
-            <option value="duration">时长</option>
+            <option value="artist">歌手</option>
+            <option value="source">音源</option>
+            <option value="size-desc">大小：大到小</option>
+            <option value="size-asc">大小：小到大</option>
+            <option value="quality-desc">品质：高到低</option>
+            <option value="quality-asc">品质：低到高</option>
+            <option value="duration-asc">时长：短到长</option>
+            <option value="duration-desc">时长：长到短</option>
           </select>
         </div>
         <table className="track-table">
@@ -887,11 +903,18 @@ export function App() {
                 "import",
                 "queue",
                 "files",
+                "logs",
               ] as View[]
             ).map((name, i) => {
-              const Icon = [Search, Music2, Heart, ListMusic, Download, Folder][
-                i
-              ];
+              const Icon = [
+                Search,
+                Music2,
+                Heart,
+                ListMusic,
+                Download,
+                Folder,
+                ScrollText,
+              ][i];
               return (
                 <button
                   key={name}
@@ -1263,16 +1286,7 @@ export function App() {
                   </div>
                   <div className="panel-content" role="tabpanel">
                     {panel === "lyrics" ? (
-                      <>
-                        {lyricContent}
-                        <div className="lyrics-bottom">
-                          <span>{lines.length ? "点击歌词跳转" : ""}</span>
-                          <button onClick={() => setView("player")}>
-                            完整歌词
-                            <ArrowRight />
-                          </button>
-                        </div>
-                      </>
+                      lyricContent
                     ) : panel === "playlist" ? (
                       listContent
                     ) : (
@@ -1369,7 +1383,9 @@ export function App() {
                 <span className="badge">{playbackLabel}</span>
               </div>
               {current ? (
-                <div className="playback-grid">
+                <div
+                  className={`playback-grid ${playlist.length ? "has-queue" : ""}`}
+                >
                   <div className="album-column">
                     <Cover track={current} large />
                     <div className="album-info">
@@ -1422,16 +1438,6 @@ export function App() {
                         加入播放列表
                       </button>
                     </div>
-                    <section className="album-queue">
-                      <div className="section-heading">
-                        <h3>待播列表</h3>
-                        <button onClick={() => setShowPlaylist(true)}>
-                          查看列表
-                          <ArrowRight />
-                        </button>
-                      </div>
-                      {listContent}
-                    </section>
                   </div>
                   <section className="lyrics-column">
                     <div className="lyrics-toolbar">
@@ -1462,10 +1468,20 @@ export function App() {
                       follow={follow}
                       size={largeLyrics}
                     />
-                    <div className="lyrics-info">
-                      <Info />
-                      点击歌词可跳转到对应位置
+                  </section>
+                  <section className="album-queue">
+                    <div className="section-heading">
+                      <h3>
+                        待播列表 <span>{playlist.length}</span>
+                      </h3>
+                      <Button
+                        label="打开播放列表"
+                        onClick={() => setShowPlaylist(true)}
+                      >
+                        <ListMusic />
+                      </Button>
                     </div>
+                    {listContent}
                   </section>
                 </div>
               ) : (
@@ -1536,7 +1552,7 @@ export function App() {
                         className="secondary"
                         onClick={() =>
                           void api<DownloadJob>(
-                            `/downloads/${job.id}/retry`,
+                            `/downloads/${job.id}/${job.status === "cancelled" ? "retry" : "resume"}`,
                             "POST",
                           )
                             .then((updated) =>
@@ -1549,7 +1565,7 @@ export function App() {
                             .catch(fail)
                         }
                       >
-                        重新下载
+                        {job.status === "cancelled" ? "重新下载" : "继续下载"}
                       </button>
                     ) : (
                       job.status !== "complete" && (
@@ -1676,6 +1692,7 @@ export function App() {
               <EngineSettings sources={sources} saved={load} />
             </section>
           )}
+          {view === "logs" && <RuntimeLogs active={!loginRequired} />}
           <footer className="player">
             <button
               className="mini-track"

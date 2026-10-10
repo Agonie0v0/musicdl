@@ -75,6 +75,11 @@ export function Lyrics({
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const center = () => {
+      if (large && container.current)
+        container.current.style.setProperty(
+          "--lyrics-center",
+          `${container.current.clientHeight / 2}px`,
+        );
       if (follow && current >= 0) {
         const element = container.current?.querySelector<HTMLElement>(
           '[data-active="true"]',
@@ -92,7 +97,7 @@ export function Lyrics({
     const observer = new ResizeObserver(center);
     if (container.current) observer.observe(container.current);
     return () => observer.disconnect();
-  }, [current, follow, size, lines]);
+  }, [current, follow, size, lines, large]);
   return (
     <div
       ref={container}

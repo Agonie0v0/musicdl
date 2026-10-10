@@ -180,10 +180,32 @@ DEFAULT_CONFIG = {
 }
 
 LOGS: deque = deque(maxlen=800)
+LOG_LOCK = threading.RLock()
+LOG_SEQUENCE = 0
 
 
-def pushlog(level: str, message: str):
-    LOGS.append({'time': time.strftime('%H:%M:%S'), 'level': level, 'message': ANSI_RE.sub('', str(message))})
+def redactlog(message):
+    text = ANSI_RE.sub('', str(message))
+    def hide_url(match):
+        try:
+            url = urlsplit(match[0])
+            return f'{url.scheme}://{url.hostname or "[主机]"}/[地址已隐藏]'
+        except ValueError:
+            return '[地址已隐藏]'
+    text = re.sub(r'https?://[^\s<>\'\"]+', hide_url, text)
+    text = re.sub(r'(?im)\b(cookies?|authorization|password|passwd|token|secret|api[_-]?key|MUSICDL_PASS)[\'\"]?\s*[:=]\s*[^\n]+',
+                  r'\1=[已隐藏]', text)
+    return text[:16000]
+
+
+def pushlog(level: str, message: str, category='system', task_id=None, timestamp=None):
+    global LOG_SEQUENCE
+    with LOG_LOCK:
+        LOG_SEQUENCE += 1
+        entry = {'id': LOG_SEQUENCE, 'time': timestamp or time.strftime('%Y-%m-%d %H:%M:%S'),
+                 'level': level, 'category': category, 'task_id': task_id, 'message': redactlog(message)}
+        LOGS.append(entry)
+        return entry
 
 
 # LoggerHandle uses staticmethods and gets deep-copied into every music client,
@@ -558,6 +580,10 @@ async def login(body: LoginBody, request: Request, response: Response):
         with SESSION_LOCK:
             SESSIONS[token] = time.time() + SESSION_TTL
         _clear_login_failures(key)
+        # Remove cookies from older releases: browsers send /api before /,
+        # but Starlette's cookie mapping keeps the last duplicate value.
+        response.delete_cookie(key=SESSION_COOKIE, path='/', secure=COOKIE_SECURE,
+                               httponly=True, samesite='strict')
         response.set_cookie(key=SESSION_COOKIE, value=token, httponly=True, secure=COOKIE_SECURE,
                             samesite='strict', path='/api', max_age=SESSION_TTL)
         return {"success": True}
@@ -571,6 +597,7 @@ async def logout(request: Request, response: Response):
         with SESSION_LOCK:
             SESSIONS.pop(token, None)
     response.delete_cookie(key=SESSION_COOKIE, path='/api', secure=COOKIE_SECURE, httponly=True, samesite='strict')
+    response.delete_cookie(key=SESSION_COOKIE, path='/', secure=COOKIE_SECURE, httponly=True, samesite='strict')
     return {"success": True}
 
 @app.on_event('startup')
@@ -1316,12 +1343,14 @@ def deletefile(d: str = Query(...), rel: str = Query(...)):
 
 @app.get('/api/logs')
 def logs():
-    return {'logs': list(LOGS)}
+    with LOG_LOCK:
+        return {'logs': list(LOGS)}
 
 
 @app.post('/api/logs/clear')
 def clearlogs():
-    LOGS.clear()
+    with LOG_LOCK:
+        LOGS.clear()
     return {'ok': True}
 
 

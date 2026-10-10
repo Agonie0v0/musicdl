@@ -136,6 +136,9 @@ def test_exact_song_info_persists_and_original_downloader_saves_audio():
     with wave.open(io.BytesIO(response.content)) as audio:
         assert audio.readframes(8000) == b'\0\0' * 8000
     assert job['bytes'] == len(response.content)
+    logs = client.get('/api/logs').json()['logs']
+    assert any(entry['category'] == 'download' and entry['task_id'] == ident and
+               'Start to download music files' in entry['message'] for entry in logs)
 
 
 def test_original_search_receives_unmodified_parser_arguments(monkeypatch):
@@ -172,21 +175,34 @@ def test_episodes_and_non_http_download_results_are_not_blocked():
     assert result['qualities']
 
 
-def test_pause_stops_original_download_worker_and_cleans_partial_file():
-    received = {}
+def test_pause_preserves_bytes_and_new_worker_resumes_original_download():
+    received, ranges = {}, []
+    audio = io.BytesIO()
+    frames = bytes(range(256)) * 1024
+    with wave.open(audio, 'wb') as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(8000)
+        writer.writeframes(frames)
+    contents = audio.getvalue()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
         def do_GET(self):
             received.update(referer=self.headers.get('Referer'), cookie=self.headers.get('Cookie'))
-            self.send_response(200)
-            self.send_header('Content-Length', str(1024 * 1024))
+            offset = int(self.headers['Range'].split('=')[1].split('-')[0]) if self.headers.get('Range') else 0
+            ranges.append((offset, self.headers.get('If-Range')))
+            self.send_response(206 if offset else 200)
+            if offset:
+                self.send_header('Content-Range', f'bytes {offset}-{len(contents)-1}/{len(contents)}')
+            self.send_header('Content-Length', str(len(contents) - offset))
+            self.send_header('ETag', '"audio-v1"')
             self.end_headers()
             try:
-                for _ in range(4096):
-                    self.wfile.write(b'\0' * 256)
+                for index in range(offset, len(contents), 256):
+                    self.wfile.write(contents[index:index+256])
                     self.wfile.flush()
-                    time.sleep(.02)
+                    time.sleep(.001 if offset else .02)
             except (BrokenPipeError, ConnectionError):
                 pass
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -213,6 +229,36 @@ def test_pause_stops_original_download_worker_and_cleans_partial_file():
         result = client.post(f'/api/downloads/{ident}/pause', headers=HEADERS)
         assert result.status_code == 200
         assert result.json()['status'] == 'paused'
-        assert not (app.original.FILE_ROOT / '.partial' / ident).exists()
+        staging = app.original.FILE_ROOT / '.partial' / ident
+        part = next(staging.rglob('*.part'))
+        saved_size = part.stat().st_size
+        assert saved_size > 0
+        assert client.get('/api/files').json() == [] or all('.partial' not in f['path'] for f in client.get('/api/files').json())
+        assert client.post(f'/api/downloads/{ident}/resume', headers=HEADERS).status_code == 200
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            job = next(j for j in client.get('/api/downloads').json() if j['id'] == ident)
+            if job['status'] in {'complete', 'failed'}:
+                break
+            time.sleep(.1)
+        assert job['status'] == 'complete', job
+        assert (saved_size, '"audio-v1"') in ranges
+        downloaded = client.get('/api/files/content', params={'path': job['file']})
+        with wave.open(io.BytesIO(downloaded.content)) as reader:
+            assert reader.readframes(len(frames)//2) == frames
+        assert not staging.exists()
+
+        # A cancelled paused job must release its retained raw file.
+        response = client.post('/api/downloads', headers=HEADERS, json=[{'track_id':value['id'], 'quality_id':value['qualities'][0]['id']}])
+        ident = response.json()[0]['id']
+        staging = app.original.FILE_ROOT / '.partial' / ident
+        for _ in range(100):
+            if any(p.stat().st_size > 0 for p in staging.rglob('*.part')):
+                break
+            time.sleep(.1)
+        assert client.post(f'/api/downloads/{ident}/pause', headers=HEADERS).status_code == 200
+        assert staging.exists()
+        assert client.post(f'/api/downloads/{ident}/cancel', headers=HEADERS).status_code == 200
+        assert not staging.exists()
     finally:
         server.shutdown()

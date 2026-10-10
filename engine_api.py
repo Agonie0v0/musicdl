@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -198,6 +199,38 @@ def install(old, root):
     searches, cache, inflight = OrderedDict(), OrderedDict(), {}
     runners, runner_lock = {}, threading.RLock()
 
+    def read_worker_logs(path, cursor=0):
+        try:
+            with path.open('rb') as handle:
+                handle.seek(cursor)
+                chunk = handle.read(262144)
+            end = chunk.rfind(b'\n') + 1
+            for line in chunk[:end].splitlines():
+                try:
+                    entry = json.loads(line)
+                    old.pushlog(entry['level'], entry['message'], category=entry.get('category', 'engine'),
+                                task_id=entry.get('task_id'), timestamp=entry.get('time'))
+                except (ValueError, KeyError, TypeError):
+                    pass
+            return cursor + end
+        except OSError:
+            return cursor
+
+    async def collect_worker_logs(future, path):
+        cursor = 0
+        try:
+            while not future.done():
+                cursor = read_worker_logs(path, cursor)
+                await asyncio.wait({future}, timeout=.5)
+            return future.result()
+        finally:
+            while path.exists():
+                updated = read_worker_logs(path, cursor)
+                if updated == cursor:
+                    break
+                cursor = updated
+            path.unlink(missing_ok=True)
+
     @router.get('/')
     def index():
         return FileResponse(root / 'frontend/dist/index.html')
@@ -276,12 +309,16 @@ def install(old, root):
         key = hashlib.sha256(json.dumps([cfg, source, keyword], sort_keys=True).encode()).hexdigest()
         cached = cache.get(key)
         if cached and time.monotonic() - cached[0] < 120:
+            old.pushlog('debug', f'{source} 命中搜索缓存，{len(cached[1])} 个结果', category='search')
             return cached[1]
         if key not in inflight:
             # The original engine owns its retries and multi-stage parsing.
             # Do not discard it after the former six-second playback deadline.
-            future = search_pool.submit(engine_worker.search, cfg, source, keyword)
-            inflight[key] = asyncio.wrap_future(future)
+            operation = uuid.uuid4().hex
+            log_path = private / f'{operation}.search.log'
+            old.pushlog('info', f'{source} 开始搜索：{keyword}', category='search', task_id=operation)
+            future = asyncio.wrap_future(search_pool.submit(engine_worker.search_logged, cfg, source, keyword, str(log_path), operation))
+            inflight[key] = asyncio.create_task(collect_worker_logs(future, log_path))
         future = inflight[key]
         try:
             songs = await asyncio.shield(future)
@@ -298,6 +335,7 @@ def install(old, root):
             sid = source_id(name)
             try:
                 songs = await source_results(cfg, name, keyword)
+                old.pushlog('info', f'{name} 搜索完成，{len(songs)} 个结果', category='search')
                 if job['cancelled']:
                     return
                 for song in songs:
@@ -306,13 +344,14 @@ def install(old, root):
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                old.pushlog('error', f'{name} 搜索失败: {type(error).__name__}')
+                old.pushlog('error', f'{name} 搜索失败\n{traceback.format_exc()}', category='search')
                 emit(job, 'source', {'id': sid, 'status': {'state': 'failed', 'count': 0, 'detail': f'原音源搜索失败（{type(error).__name__}），可检查音源设置后重试'}})
         try:
             await asyncio.gather(*(run_source(name) for name in sources))
         finally:
             emit(job, 'done', {'cancelled': job['cancelled']})
             job['done'] = True
+            old.pushlog('info', '搜索已停止' if job['cancelled'] else '全部音源搜索结束', category='search')
 
     @router.post('/api/search/jobs')
     async def search_start(body: SearchBody):
@@ -329,6 +368,7 @@ def install(old, root):
                 break
             del searches[ended]
         ident = uuid.uuid4().hex
+        old.pushlog('info', f'开始搜索：{keyword}，{len(set(sources))} 个音源', category='search', task_id=ident)
         job = {'events': [], 'changed': asyncio.Event(), 'done': False, 'cancelled': False}
         searches[ident] = job
         job['task'] = asyncio.create_task(run_search(job, cfg, list(dict.fromkeys(sources)), keyword))
@@ -368,7 +408,9 @@ def install(old, root):
 
     @router.post('/api/tracks/{sid}/playback')
     def playback(sid: str):
-        return remember(song_for(sid), sid)
+        result = remember(song_for(sid), sid)
+        old.pushlog('info', f'准备试听：{result["title"]} · {result["source"]} · {result["playback"]["codec"]}', category='playback')
+        return result
 
     @router.post('/api/tracks/{sid}/versions')
     def versions(sid: str):
@@ -428,7 +470,13 @@ def install(old, root):
                 raise HTTPException(400, '该音源请粘贴完整歌单链接')
             url = templates[body.source].format(url)
         old.validatepublicurl(url, '歌单链接', old.PLAYLIST_ALLOWED_HOSTS)
-        songs = await asyncio.wrap_future(search_pool.submit(engine_worker.playlist, copy.deepcopy(old.manager.config), url))
+        operation = uuid.uuid4().hex
+        log_path = private / f'{operation}.playlist.log'
+        old.pushlog('info', '开始解析歌单', category='playlist', task_id=operation)
+        future = asyncio.wrap_future(search_pool.submit(engine_worker.playlist_logged, copy.deepcopy(old.manager.config), url, str(log_path), operation))
+        # Keep draining the original parser even when the browser disconnects.
+        songs = await asyncio.shield(asyncio.create_task(collect_worker_logs(future, log_path)))
+        old.pushlog('info', f'歌单解析完成，{len(songs)} 首曲目', category='playlist', task_id=operation)
         return {'tracks': [remember(song) for song in songs], 'detail': f'原引擎解析到 {len(songs)} 首曲目'}
 
     def file_token(path):
@@ -443,6 +491,7 @@ def install(old, root):
         cfg = copy.deepcopy(old.manager.config)
         input_path, output_path = private / f'{ident}.input', private / f'{ident}.progress'
         staging = old.FILE_ROOT / '.partial' / ident
+        log_path, log_cursor = Path(str(output_path) + '.log'), 0
         def clear_staging():
             if staging.exists() and staging.resolve().is_relative_to(old.FILE_ROOT.resolve()) and not staging.is_symlink():
                 shutil.rmtree(staging)
@@ -453,19 +502,23 @@ def install(old, root):
                 original_song = copy.deepcopy(song)
                 old.applylayout(original_song)
                 # Isolate each job's partial files; publish only completed outputs.
-                clear_staging()
+                if staging.is_symlink() or not staging.resolve().is_relative_to(old.FILE_ROOT.resolve()):
+                    raise ValueError('临时下载目录不在音乐库中')
                 staging.mkdir(parents=True, exist_ok=True)
+                output_path.unlink(missing_ok=True)
                 intended_dir = Path(original_song.work_dir).resolve()
                 if not any(intended_dir.is_relative_to(base) for base in old.manager.workdirs()):
                     raise ValueError('曲目保存路径不在音乐库中')
                 original_song.work_dir, original_song._save_path = str(staging), None
-                input_path.write_bytes(pickle.dumps({'song': original_song, 'config': cfg}, protocol=pickle.HIGHEST_PROTOCOL))
+                input_path.write_bytes(pickle.dumps({'song': original_song, 'config': cfg,
+                                                    'bytes': job['bytes'], 'total_bytes': job['total_bytes']}, protocol=pickle.HIGHEST_PROTOCOL))
                 process = subprocess.Popen([sys.executable, str(root / 'engine_worker.py'), str(input_path), str(output_path)],
                                            cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
                                            start_new_session=os.name != 'nt')
                 control['process'] = process
             while process.poll() is None:
+                log_cursor = read_worker_logs(log_path, log_cursor)
                 if output_path.exists():
                     try:
                         progress = json.loads(output_path.read_text(encoding='utf-8'))
@@ -478,6 +531,7 @@ def install(old, root):
                         pass
                 time.sleep(.25)
             with runner_lock:
+                log_cursor = read_worker_logs(log_path, log_cursor)
                 if control['stop']:
                     return
                 outcome = json.loads(output_path.read_text(encoding='utf-8')) if output_path.exists() else {}
@@ -506,21 +560,33 @@ def install(old, root):
                         raise ValueError('下载器没有保存音频文件')
                     job.update(status='complete', bytes=audio.stat().st_size, total_bytes=audio.stat().st_size,
                                file=file_token(audio), detail=outcome['detail'])
+                old.pushlog('info' if job['status'] == 'complete' else 'error',
+                            f'{job["track"]["title"]} · {job["track"]["source"]}：{job["detail"]}', category='download', task_id=ident)
                 put('download', ident, job)
         except Exception as error:
+            old.pushlog('error', f'下载任务异常\n{traceback.format_exc()}', category='download', task_id=ident)
             with runner_lock:
                 if not control['stop']:
                     job.update(status='failed', detail=f'原引擎下载失败：{type(error).__name__}')
                     put('download', ident, job)
         finally:
+            while log_path.exists():
+                updated = read_worker_logs(log_path, log_cursor)
+                if updated == log_cursor:
+                    break
+                log_cursor = updated
+            log_path.unlink(missing_ok=True)
             input_path.unlink(missing_ok=True)
             output_path.unlink(missing_ok=True)
-            clear_staging()
+            if job['status'] == 'complete' or control.get('cancel'):
+                clear_staging()
             with runner_lock:
                 runners.pop(ident, None)
             control['finished'].set()
 
     def launch(job, song):
+        old.pushlog('info', f'{job["track"]["title"]} · {job["track"]["source"]} 加入下载队列，音质 {job["quality_label"]}',
+                    category='download', task_id=job['id'])
         control = {'stop': False, 'process': None, 'finished': threading.Event()}
         runners[job['id']] = control
         download_pool.submit(run_download, job, song, control)
@@ -571,13 +637,15 @@ def install(old, root):
             if not job:
                 raise HTTPException(404, '任务不存在')
             active = runners.get(ident)
-            if action == 'retry':
+            if action in {'retry', 'resume'}:
                 if active or job['status'] == 'complete':
                     raise HTTPException(409, '任务正在执行或已经完成')
                 song = song_for(job['track']['id'])
                 if track(song)['qualities'][0]['id'] != job['quality_id']:
                     raise HTTPException(409, '音质已变化，请重新选择下载版本')
-                job.update(status='queued', bytes=0, total_bytes=None, detail='重新使用原音源下载器下载')
+                if job['status'] == 'cancelled':
+                    job.update(bytes=0, total_bytes=None)
+                job.update(status='queued', detail='准备继续下载，检查音源续传支持')
                 put('download', ident, job)
                 launch(job, song)
                 return job
@@ -585,11 +653,20 @@ def install(old, root):
                 raise HTTPException(400, '操作无效')
             if active:
                 active['stop'] = True
+                active['cancel'] = action == 'cancel'
                 terminate(active['process'])
-            job.update(status='paused' if action == 'pause' else 'cancelled', detail='已停止；继续时从头下载')
+            job.update(status='paused' if action == 'pause' else 'cancelled',
+                       detail='已暂停，保留下载进度' if action == 'pause' else '已取消，临时文件已清理')
             put('download', ident, job)
+            old.pushlog('info', f'{job["track"]["title"]}：{job["detail"]}', category='download', task_id=ident)
         if active:
             active['finished'].wait(20)
+        if action == 'cancel' and (not active or active['finished'].is_set()):
+            staging = old.FILE_ROOT / '.partial' / ident
+            if staging.exists() and staging.resolve().is_relative_to(old.FILE_ROOT.resolve()) and not staging.is_symlink():
+                shutil.rmtree(staging)
+            job.update(bytes=0, total_bytes=None)
+            put('download', ident, job)
         return job
 
     @router.get('/api/files')
@@ -623,7 +700,7 @@ def install(old, root):
 
     for job in values('download'):
         if job['status'] in {'queued', 'resolving', 'downloading', 'enriching'}:
-            job.update(status='paused', detail='服务已重启，可继续使用原音源下载器下载')
+            job.update(status='paused', detail='服务已重启，下载进度已保留，可继续下载')
             put('download', job['id'], job)
 
     # New UI routes take precedence; every non-conflicting original endpoint,

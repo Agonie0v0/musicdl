@@ -19,7 +19,7 @@ jobs:
           node-version: '24'
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
-      - run: python -m pytest tests/test_engine_compat.py -q
+      - run: python -m pytest tests/test_engine_compat.py tests/test_resumable_download.py -q
       - run: python -m pytest legacy/tests/test_app.py -q
   frontend:
     runs-on: ubuntu-latest

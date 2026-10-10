@@ -54,7 +54,7 @@ def test_unicode_login_uses_random_revocable_session(monkeypatch):
     with TestClient(app.app) as client:
         login = client.post('/api/auth/login', headers=WRITE_HEADERS,
                             json={'username': username, 'password': password})
-        cookie = login.headers.get('set-cookie', '')
+        cookie = next(value for value in login.headers.get_list('set-cookie') if 'Path=/api' in value)
         authenticated = client.get('/api/config')
         logout = client.post('/api/auth/logout', headers=WRITE_HEADERS, json={})
         after_logout = client.get('/api/config')
@@ -64,6 +64,35 @@ def test_unicode_login_uses_random_revocable_session(monkeypatch):
     assert authenticated.status_code == 200
     assert logout.status_code == 200
     assert after_logout.status_code == 401
+
+
+def test_login_removes_legacy_root_cookie(monkeypatch):
+    monkeypatch.setattr(app, 'AUTH_ENABLED', True)
+    monkeypatch.setattr(app, 'COOKIE_SECURE', False)
+    monkeypatch.setattr(app, 'AUTH_USER_DIGEST', hashlib.sha256(b'admin').digest())
+    monkeypatch.setattr(app, 'AUTH_PASS_DIGEST', hashlib.sha256(b'test-password').digest())
+    with TestClient(app.app) as client:
+        client.cookies.set(app.SESSION_COOKIE, 'stale-session', domain='testserver.local', path='/')
+        assert client.get('/api/config').status_code == 401
+        response = client.post('/api/auth/login', headers=WRITE_HEADERS,
+                               json={'username': 'admin', 'password': 'test-password'})
+        assert response.status_code == 200
+        assert [(cookie.path, cookie.value) for cookie in client.cookies.jar
+                if cookie.name == app.SESSION_COOKIE] == [('/api', next(iter(app.SESSIONS)))]
+        assert client.get('/api/config').status_code == 200
+
+
+def test_runtime_logs_redact_secrets_and_retain_diagnostic_context(monkeypatch):
+    entry = app.pushlog('error', 'Download failed: HTTP 403 https://user:pass@audio.example/song?token=private\nCookie: session=private-cookie\nAuthorization: Bearer private-key\nValueError: wrong format',
+                        category='download', task_id='fixture-task')
+    assert 'HTTP 403' in entry['message'] and 'ValueError: wrong format' in entry['message']
+    assert 'audio.example' in entry['message']
+    for secret in ('user:pass', 'private', 'session=private-cookie', 'Bearer private-key'):
+        assert secret not in entry['message']
+    with TestClient(app.app) as client:
+        logs = client.get('/api/logs').json()['logs']
+    assert entry in logs
+    assert entry['id'] > 0 and entry['category'] == 'download' and entry['task_id'] == 'fixture-task'
 
 
 def test_workdir_cannot_escape_fixed_root(monkeypatch, tmp_path):
