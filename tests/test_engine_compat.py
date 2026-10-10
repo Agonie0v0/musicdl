@@ -8,6 +8,7 @@ import tempfile
 import time
 import wave
 import threading
+from concurrent.futures import Future
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _root = Path(tempfile.mkdtemp(prefix='musicdl-compat-test-'))
@@ -22,6 +23,78 @@ import app
 import engine_worker
 
 HEADERS = {'X-MusicDL-Request': '1'}
+
+
+def test_import_creates_managed_playlist_with_native_failure_report(monkeypatch):
+    client = TestClient(app.app)
+    failure = {'id': 1950343972, 'name': '可能', 'ar': [{'name': '程响'}],
+               'noCopyrightRcmd': {'typeDesc': '其它版本可播'}}
+    def native_playlist(config, url):
+        app.original.LoggerHandle.warning(f'Fail to parse track info {failure}')
+        return [fixture_song()]
+    monkeypatch.setattr(engine_worker, 'playlist', native_playlist)
+    def inline_submit(fn, *args):
+        future = Future()
+        try:
+            future.set_result(fn(*args))
+        except Exception as error:
+            future.set_exception(error)
+        return future
+    monkeypatch.setattr(app.app.state.engine_test['search_pool'], 'submit', inline_submit)
+    response = client.post('/api/playlist/import', headers=HEADERS,
+                           json={'source': 'netease', 'id': '1234', 'name': '通勤歌单'})
+    assert response.status_code == 200, response.text
+    saved = response.json()['playlist']
+    ident = saved['id']
+    track = saved['tracks'][0]
+    assert saved['name'] == '通勤歌单'
+    assert saved['issues'][0]['title'] == '可能'
+    assert saved['issues'][0]['artist'] == '程响'
+    assert '其它版本可播' in saved['issues'][0]['reason']
+    assert '1 首' in saved['detail']
+    summaries = client.get('/api/playlists').json()
+    summary = next(c for c in summaries if c['id'] == ident)
+    assert summary['track_count'] == summary['issue_count'] == 1
+    assert 'tracks' not in summary
+    assert client.get(f'/api/playlists/{ident}').json()['tracks'] == saved['tracks']
+    # Saved collections and complete SongInfo survive outside in-memory results.
+    import sqlite3
+    with sqlite3.connect(_root / 'data/musicdl.db') as db:
+        body = json.loads(db.execute("SELECT body FROM records WHERE kind='collection' AND id=?", (ident,)).fetchone()[0])
+        assert body['tracks'][0]['id'] == track['id']
+    logs = client.get('/api/logs').json()['logs']
+    assert any(l['task_id'] == ident and '跳过曲目「可能」' in l['message'] for l in logs)
+    assert not any(l['task_id'] == ident and 'Fail to parse track info' in l['message'] for l in logs)
+    assert client.patch(f'/api/playlists/{ident}', headers=HEADERS, json={'name': ' '}).status_code == 400
+    assert client.patch(f'/api/playlists/{ident}', headers=HEADERS, json={'name': '新名称'}).json()['name'] == '新名称'
+    assert client.delete(f'/api/playlists/{ident}/tracks/{track["id"]}', headers=HEADERS).json()['tracks'] == []
+    assert client.get(f'/api/tracks/{track["id"]}/lyrics').status_code == 200
+    assert client.delete(f'/api/playlists/{ident}', headers=HEADERS).status_code == 200
+    assert client.get(f'/api/playlists/{ident}').status_code == 404
+
+
+def test_empty_import_is_not_false_success(monkeypatch):
+    future = Future()
+    future.set_result({'songs': [], 'issues': []})
+    monkeypatch.setattr(app.app.state.engine_test['search_pool'], 'submit', lambda *args: future)
+    client = TestClient(app.app)
+    before = client.get('/api/playlists').json()
+    result = client.post('/api/playlist/import', headers=HEADERS, json={'source': 'netease', 'id': '1234'})
+    assert result.status_code == 422
+    assert '未创建歌单' in result.json()['detail']
+    assert client.get('/api/playlists').json() == before
+
+
+def test_fully_unresolved_import_retains_missing_song_report(monkeypatch):
+    future = Future()
+    future.set_result({'songs': [], 'issues': [{'title': '不可用', 'source_id': '42', 'artist': '', 'reason': '资源不可用'}]})
+    monkeypatch.setattr(app.app.state.engine_test['search_pool'], 'submit', lambda *args: future)
+    client = TestClient(app.app)
+    result = client.post('/api/playlist/import', headers=HEADERS, json={'source': 'netease', 'id': '1234'})
+    assert result.status_code == 200
+    saved = result.json()['playlist']
+    assert saved['tracks'] == [] and len(saved['issues']) == 1
+    assert client.delete(f'/api/playlists/{saved["id"]}', headers=HEADERS).status_code == 200
 
 
 def test_registry_and_complete_settings_round_trip():

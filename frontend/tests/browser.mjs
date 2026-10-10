@@ -161,7 +161,8 @@ try {
   ];
   let favorites = [],
     playlist = [],
-    jobs = [];
+    jobs = [],
+    savedPlaylists = [];
   const wav = Buffer.alloc(44 + 8000 * 2 * 8);
   wav.write("RIFF");
   wav.writeUInt32LE(wav.length - 8, 4);
@@ -201,6 +202,47 @@ try {
       if (method === "PUT")
         playlist = request.postDataJSON().length ? [track] : [];
       result = method === "PUT" ? { saved: true } : playlist;
+    } else if (p === "/playlist/import") {
+      const input = request.postDataJSON();
+      const list = {
+        id: "collection-1",
+        name: input.name || "测试歌单",
+        source: "netease",
+        source_url: input.id,
+        created_at: 1791623400,
+        tracks: [track],
+        issues: [
+          {
+            title: "可能",
+            artist: "程响",
+            source_id: "1950343972",
+            reason: "未获得可用音频地址，音源提示：其它版本可播。",
+          },
+        ],
+        detail: "成功导入 1 首，1 首未获取到可用资源。",
+        task_id: "collection-1",
+      };
+      savedPlaylists = [list];
+      result = { playlist: list, tracks: list.tracks, detail: list.detail };
+    } else if (p === "/playlists") {
+      result = savedPlaylists.map(({ tracks, issues, ...list }) => ({
+        ...list,
+        track_count: tracks.length,
+        issue_count: issues.length,
+        cover: tracks[0]?.cover || null,
+      }));
+    } else if (p.startsWith("/playlists/")) {
+      const list = savedPlaylists[0];
+      if (p.includes("/tracks/")) {
+        list.tracks = [];
+        result = list;
+      } else if (method === "DELETE") {
+        savedPlaylists = [];
+        result = { deleted: true };
+      } else if (method === "PATCH") {
+        list.name = request.postDataJSON().name;
+        result = list;
+      } else result = list;
     } else if (p === "/downloads") {
       if (method === "POST") {
         const item = request.postDataJSON()[0];
@@ -632,6 +674,61 @@ try {
     ),
   );
   await page.screenshot({ path: "../output/test-ui-logs-mobile.png" });
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.getByRole("button", { name: "歌单导入", exact: true }).click();
+  await page.getByLabel("歌单名称（可选）").fill("通勤歌单");
+  await page.getByLabel("歌单链接 / ID").fill("1234");
+  await page
+    .getByRole("button", { name: "导入并保存歌单", exact: true })
+    .click();
+  await expect(page.locator(".playlist-heading h2")).toHaveText("通勤歌单");
+  await expect(page.locator(".playlist-issues")).toContainText("可能");
+  await expect(page.locator(".playlist-issues")).toContainText("其它版本可播");
+  assert.equal(await page.locator(".track-table tbody tr").count(), 1);
+  await expect(
+    page.getByRole("button", { name: "移出歌单 测试曲目", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: "../output/test-ui-playlist-detail.png" });
+  await page.getByRole("button", { name: "重命名", exact: true }).click();
+  await page.getByLabel("歌单名称", { exact: true }).fill("晚间歌单");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.locator(".playlist-heading h2")).toHaveText("晚间歌单");
+  await page.getByRole("button", { name: "所有歌单", exact: true }).click();
+  await expect(page.locator(".saved-playlist")).toContainText("晚间歌单");
+  await page.screenshot({ path: "../output/test-ui-playlist-library.png" });
+  await page.reload();
+  await page.getByRole("button", { name: "我的歌单", exact: true }).click();
+  await expect(page.locator(".saved-playlist")).toContainText("晚间歌单");
+  await page.locator(".saved-playlist").click();
+  await expect(page.locator(".playlist-heading h2")).toHaveText("晚间歌单");
+  await page.getByRole("button", { name: "播放全部", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector("audio").paused);
+  await expect(page.locator(".playlist-heading h2")).toHaveText("晚间歌单");
+  await page.getByLabel("界面主题").selectOption("dark");
+  await page.screenshot({ path: "../output/test-ui-playlist-dark.png" });
+  await page.getByLabel("界面主题").selectOption("light");
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
+  await page.screenshot({
+    path: "../output/test-ui-playlist-mobile.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.getByRole("button", { name: "下载全部", exact: true }).click();
+  await page.getByRole("button", { name: "加入下载队列", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "移出歌单 测试曲目", exact: true })
+    .click();
+  await expect(page.locator(".track-table tbody tr")).toHaveCount(0);
+  await page.getByRole("button", { name: "删除歌单", exact: true }).click();
+  await page.getByRole("button", { name: "确认删除", exact: true }).click();
+  await expect(page.locator(".saved-playlist")).toHaveCount(0);
+  await expect(page.locator(".library-empty")).toBeVisible();
   assert.deepEqual(errors, []);
   console.log(
     "Browser integration passed: search, real audio, lyric seeking, favorites, playlist, quality selection, queue controls, settings, responsive layout.",

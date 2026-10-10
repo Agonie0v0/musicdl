@@ -54,6 +54,11 @@ class DownloadItem(BaseModel):
 class ImportBody(BaseModel):
     source: str = ''
     id: str = Field(min_length=1, max_length=2048)
+    name: str = Field(default='', max_length=100)
+
+
+class PlaylistNameBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
 
 
 def install(old, root):
@@ -475,9 +480,77 @@ def install(old, root):
         old.pushlog('info', '开始解析歌单', category='playlist', task_id=operation)
         future = asyncio.wrap_future(search_pool.submit(engine_worker.playlist_logged, copy.deepcopy(old.manager.config), url, str(log_path), operation))
         # Keep draining the original parser even when the browser disconnects.
-        songs = await asyncio.shield(asyncio.create_task(collect_worker_logs(future, log_path)))
-        old.pushlog('info', f'歌单解析完成，{len(songs)} 首曲目', category='playlist', task_id=operation)
-        return {'tracks': [remember(song) for song in songs], 'detail': f'原引擎解析到 {len(songs)} 首曲目'}
+        async def finish_import():
+            try:
+                parsed = await collect_worker_logs(future, log_path)
+                songs, issues = parsed['songs'], parsed['issues']
+                if not songs and not issues:
+                    old.pushlog('warning', '未解析到曲目：请检查歌单链接、音源设置或 Cookie。原引擎未返回具体原因。', category='playlist', task_id=operation)
+                    raise HTTPException(422, '未解析到曲目，未创建歌单。请检查歌单链接、公开状态和音源配置，更多信息可查看运行日志。')
+                imported = list({t['id']: t for t in (remember(song) for song in songs)}.values())
+                source = imported[0]['source'] if imported else body.source
+                # Native parsers place the actual playlist title in their work directory.
+                native_name = ''
+                if songs:
+                    directory = re.split(r'[/\\]', str(songs[0].work_dir or ''))[-1]
+                    match = re.fullmatch(r'\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2} (.+)', directory)
+                    native_name = match[1][:100] if match else ''
+                name = body.name.strip() or native_name or f'{LABELS.get(source, source) or "平台"}歌单 {len(values("collection")) + 1}'
+                detail = f'成功导入 {len(imported)} 首' + (f'，{len(issues)} 首未获取到可用资源，详见未导入曲目。' if issues else '。')
+                collection = {'id': operation, 'name': name, 'source': source,
+                              'source_url': url, 'created_at': int(time.time()),
+                              'tracks': imported, 'issues': issues, 'detail': detail,
+                              'task_id': operation}
+                put('collection', operation, collection)
+                old.pushlog('warning' if issues else 'info', detail, category='playlist', task_id=operation)
+                return {'playlist': collection, 'tracks': imported, 'detail': detail}
+            except HTTPException:
+                raise
+            except Exception:
+                old.pushlog('error', f'歌单导入失败\n{traceback.format_exc()}', category='playlist', task_id=operation)
+                raise HTTPException(502, '歌单解析失败，请在运行日志中查看原因；可稍后重试或检查音源配置。')
+        return await asyncio.shield(asyncio.create_task(finish_import()))
+
+    @router.get('/api/playlists')
+    def collections():
+        return [{key: value for key, value in c.items() if key not in {'tracks', 'issues'}} |
+                {'track_count': len(c['tracks']), 'issue_count': len(c['issues']),
+                 'cover': next((t['cover'] for t in c['tracks'] if t.get('cover')), None)}
+                for c in values('collection')]
+
+    def collection_for(ident):
+        value = get('collection', ident)
+        if value is None:
+            raise HTTPException(404, '歌单不存在')
+        return value
+
+    @router.get('/api/playlists/{ident}')
+    def collection_read(ident: str):
+        return collection_for(ident)
+
+    @router.patch('/api/playlists/{ident}')
+    def collection_rename(ident: str, body: PlaylistNameBody):
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, '请输入歌单名称')
+        value = collection_for(ident)
+        value['name'] = name
+        put('collection', ident, value)
+        return value
+
+    @router.delete('/api/playlists/{ident}')
+    def collection_delete(ident: str):
+        collection_for(ident)
+        remove('collection', ident)
+        # Shared track records and audio files belong to other library views too.
+        return {'deleted': True}
+
+    @router.delete('/api/playlists/{ident}/tracks/{sid}')
+    def collection_remove_track(ident: str, sid: str):
+        value = collection_for(ident)
+        value['tracks'] = [t for t in value['tracks'] if t['id'] != sid]
+        put('collection', ident, value)
+        return value
 
     def file_token(path):
         path = Path(path).resolve()

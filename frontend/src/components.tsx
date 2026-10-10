@@ -6,7 +6,7 @@ export function Cover({
   track,
   large = false,
 }: {
-  track?: Track | null;
+  track?: Pick<Track, "cover"> | null;
   large?: boolean;
 }) {
   return (

@@ -69,3 +69,28 @@ export interface SourceStatus {
   count?: number;
   detail?: string;
 }
+export interface PlaylistIssue {
+  source_id: string;
+  title: string;
+  artist: string;
+  reason: string;
+}
+export interface SavedPlaylist {
+  id: string;
+  name: string;
+  source: string;
+  source_url: string;
+  created_at: number;
+  tracks: Track[];
+  issues: PlaylistIssue[];
+  detail: string;
+  task_id: string;
+}
+export interface PlaylistSummary extends Omit<
+  SavedPlaylist,
+  "tracks" | "issues"
+> {
+  track_count: number;
+  issue_count: number;
+  cover: string | null;
+}

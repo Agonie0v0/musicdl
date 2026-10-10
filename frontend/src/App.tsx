@@ -1,6 +1,7 @@
 import { Cover, Button, Lyrics, Modal } from "./components";
 import { EngineSettings } from "./EngineSettings";
 import { RuntimeLogs } from "./RuntimeLogs";
+import { PlaylistLibrary } from "./PlaylistLibrary";
 import { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
@@ -30,6 +31,7 @@ import {
   Monitor,
   History,
   ScrollText,
+  Trash2,
 } from "lucide-react";
 import { api } from "./api";
 import { selectResults } from "./results";
@@ -40,6 +42,8 @@ import type {
   DownloadJob,
   LibraryFile,
   SourceStatus,
+  SavedPlaylist,
+  PlaylistSummary,
 } from "./types";
 
 const defaultSources = [
@@ -52,7 +56,8 @@ const defaultSources = [
 const views = {
   search: ["搜索音乐", "歌曲、歌手、专辑与不同音质版本"],
   player: ["正在播放", "歌词与播放列表"],
-  import: ["歌单导入", "导入歌单后选择试听或下载版本"],
+  import: ["歌单导入", "导入后独立保存到我的歌单"],
+  playlists: ["我的歌单", "保存、播放与管理导入的歌单"],
   queue: ["下载队列", "下载进度与所选音质"],
   favorites: ["我的收藏", "保存喜欢的曲目与音源"],
   files: ["音乐文件", "本地音乐库"],
@@ -120,6 +125,9 @@ export function App() {
     [playlist, setPlaylist] = useState<Track[]>([]),
     [jobs, setJobs] = useState<DownloadJob[]>([]),
     [files, setFiles] = useState<LibraryFile[]>([]);
+  const [savedPlaylists, setSavedPlaylists] = useState<PlaylistSummary[]>([]),
+    [activePlaylist, setActivePlaylist] = useState<SavedPlaylist | null>(null),
+    [importName, setImportName] = useState("");
   const [current, setCurrent] = useState<Track | null>(null),
     [playing, setPlaying] = useState(false),
     [loadingPlay, setLoadingPlay] = useState(false),
@@ -180,16 +188,18 @@ export function App() {
   const fail = (error: unknown) =>
     setNotice(error instanceof Error ? error.message : String(error));
   async function load() {
-    const [cfg, favs, list, downloads] = await Promise.all([
+    const [cfg, favs, list, downloads, collections] = await Promise.all([
       api<Config>("/config"),
       api<Track[]>("/favorites"),
       api<Track[]>("/playlist"),
       api<DownloadJob[]>("/downloads"),
+      api<PlaylistSummary[]>("/playlists"),
     ]);
     setConfig(cfg);
     setFavorites(favs);
     setPlaylist(list);
     setJobs(downloads);
+    setSavedPlaylists(collections);
   }
   useEffect(() => {
     const login = () => setLoginRequired(true);
@@ -232,8 +242,14 @@ export function App() {
   }, [volume]);
   currentRef.current = current;
   const favIds = new Set(favorites.map((t) => t.id));
+  const tableTracks =
+    view === "favorites"
+      ? favorites
+      : view === "playlists"
+        ? activePlaylist?.tracks || []
+        : tracks;
   const display = selectResults(
-    view === "favorites" ? favorites : tracks,
+    tableTracks,
     sourceFilter,
     filter,
     readyOnly,
@@ -493,19 +509,24 @@ export function App() {
   async function download() {
     if (!qualityTracks) return;
     setBusy(true);
+    let queued = 0;
     try {
-      const created = await api<DownloadJob[]>(
-        "/downloads",
-        "POST",
-        qualityTracks.map((track) => ({
-          track_id: track.id,
-          quality_id: qualities[track.id],
-        })),
-      );
-      setJobs((previous) => [...created, ...previous]);
+      for (let offset = 0; offset < qualityTracks.length; offset += 200) {
+        const created = await api<DownloadJob[]>(
+          "/downloads",
+          "POST",
+          qualityTracks.slice(offset, offset + 200).map((track) => ({
+            track_id: track.id,
+            quality_id: qualities[track.id],
+          })),
+        );
+        queued += created.length;
+        setJobs((previous) => [...created, ...previous]);
+      }
       setQualityTracks(null);
-      setNotice(`已加入 ${created.length} 首下载任务`);
+      setNotice(`已加入 ${queued} 首下载任务`);
     } catch (error) {
+      if (queued) setQualityTracks(qualityTracks.slice(queued));
       fail(error);
     } finally {
       setBusy(false);
@@ -515,26 +536,76 @@ export function App() {
     setBusy(true);
     try {
       const id = importId.trim();
-      const result = await api<{ tracks: Track[]; detail: string }>(
+      const result = await api<{ playlist: SavedPlaylist; detail: string }>(
         "/playlist/import",
         "POST",
-        { source: importSource, id },
+        { source: importSource, id, name: importName.trim() },
       );
-      setTracks(result.tracks);
-      setStatuses({});
-      setSourceFilter("all");
-      setFilter("all");
-      setView("search");
+      setActivePlaylist(result.playlist);
+      resetCollectionFilters();
+      setView("playlists");
       setNotice(result.detail);
+      setImportId("");
+      setImportName("");
+      await refreshPlaylists();
     } catch (error) {
       fail(error);
     } finally {
       setBusy(false);
     }
   }
-  const selection = (view === "favorites" ? favorites : tracks).filter((t) =>
-    selected.has(t.id),
-  );
+  function resetCollectionFilters() {
+    setSourceFilter("all");
+    setFilter("all");
+    setReadyOnly(false);
+    setSort("relevance");
+    setSelected(new Set());
+  }
+  async function refreshPlaylists() {
+    setSavedPlaylists(await api<PlaylistSummary[]>("/playlists"));
+  }
+  async function openPlaylist(id: string) {
+    try {
+      setActivePlaylist(await api<SavedPlaylist>(`/playlists/${id}`));
+      resetCollectionFilters();
+    } catch (error) {
+      fail(error);
+    }
+  }
+  async function playCollection(items: Track[]) {
+    const playable = items.filter((t) => t.playback.state === "ready");
+    if (!playable.length) {
+      setNotice("此歌单暂无可试听曲目，可选择下载。");
+      return;
+    }
+    try {
+      await api(
+        "/playlist",
+        "PUT",
+        playable.map((t) => t.id),
+      );
+      setPlaylist(playable);
+      await play(playable[0]);
+    } catch (error) {
+      fail(error);
+    }
+  }
+  async function removeCollectionTrack(id: string) {
+    if (!activePlaylist) return;
+    try {
+      setActivePlaylist(
+        await api<SavedPlaylist>(
+          `/playlists/${activePlaylist.id}/tracks/${id}`,
+          "DELETE",
+        ),
+      );
+      setSelected((previous) => new Set([...previous].filter((s) => s !== id)));
+      await refreshPlaylists();
+    } catch (error) {
+      fail(error);
+    }
+  }
+  const selection = tableTracks.filter((t) => selected.has(t.id));
   const selectedToggle = (id: string) =>
     setSelected((previous) => {
       const next = new Set(previous);
@@ -600,7 +671,11 @@ export function App() {
       <section className="results">
         <div className="result-tools">
           <strong>
-            {view === "favorites" ? "收藏曲目" : "搜索结果"}{" "}
+            {view === "favorites"
+              ? "收藏曲目"
+              : view === "playlists"
+                ? "歌单曲目"
+                : "搜索结果"}{" "}
             <span>{display.length}</span>
           </strong>
           <div className="filter-group" role="group" aria-label="音质筛选">
@@ -675,6 +750,7 @@ export function App() {
               <th>播放</th>
               <th>下载</th>
               <th>加入播放列表</th>
+              {view === "playlists" && <th>移出歌单</th>}
             </tr>
           </thead>
           <tbody>
@@ -814,19 +890,32 @@ export function App() {
                     <span>加入播放列表</span>
                   </button>
                 </td>
+                {view === "playlists" && (
+                  <td className="track-action">
+                    <Button
+                      label={`移出歌单 ${track.title}`}
+                      onClick={() => void removeCollectionTrack(track.id)}
+                    >
+                      <Trash2 />
+                      <span>移出歌单</span>
+                    </Button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
         </table>
         {!display.length && (
           <div className="empty">
-            {searching
+            {view === "search" && searching
               ? "正在搜索，结果将逐步显示…"
               : view === "favorites"
                 ? "还没有收藏，点击曲目旁的爱心保存。"
-                : tracks.length
+                : tableTracks.length
                   ? "没有符合筛选条件的曲目。"
-                  : "输入歌曲、歌手或专辑开始搜索。"}
+                  : view === "playlists"
+                    ? "歌单暂无可用曲目，可在上方查看未导入原因。"
+                    : "输入歌曲、歌手或专辑开始搜索。"}
           </div>
         )}
       </section>
@@ -834,11 +923,13 @@ export function App() {
         <Info />
         音源标注的音质将在下载前验证
         <span>
-          {firstMs !== null
-            ? `首个可试听结果 ${(firstMs / 1000).toFixed(2)} 秒`
-            : searching
-              ? "正在准备试听资源"
-              : ""}
+          {view !== "search"
+            ? ""
+            : firstMs !== null
+              ? `首个可试听结果 ${(firstMs / 1000).toFixed(2)} 秒`
+              : searching
+                ? "正在准备试听资源"
+                : ""}
         </span>
       </div>
       <div className="selection-bar">
@@ -900,6 +991,7 @@ export function App() {
                 "search",
                 "player",
                 "favorites",
+                "playlists",
                 "import",
                 "queue",
                 "files",
@@ -911,6 +1003,7 @@ export function App() {
                 Music2,
                 Heart,
                 ListMusic,
+                Plus,
                 Download,
                 Folder,
                 ScrollText,
@@ -1605,6 +1698,42 @@ export function App() {
               )}
             </section>
           )}
+          {view === "playlists" && (
+            <PlaylistLibrary
+              lists={savedPlaylists}
+              current={activePlaylist}
+              sourceName={(id) => sources.find((s) => s.id === id)?.label || id}
+              open={(id) => void openPlaylist(id)}
+              back={() => {
+                setActivePlaylist(null);
+                setSelected(new Set());
+                void refreshPlaylists().catch(fail);
+              }}
+              onImport={() => setView("import")}
+              changed={(list) => {
+                setActivePlaylist(list);
+                void refreshPlaylists().catch(fail);
+              }}
+              deleted={(id) => {
+                setActivePlaylist(null);
+                setSavedPlaylists((previous) =>
+                  previous.filter((l) => l.id !== id),
+                );
+                setSelected(new Set());
+              }}
+              playAll={(items) => void playCollection(items)}
+              queueAll={(items) => void addToPlaylist(items)}
+              downloadAll={(items) => void chooseDownload(items)}
+              search={(keyword) => {
+                resetCollectionFilters();
+                setQuery(keyword);
+                void search(keyword);
+              }}
+              logs={() => setView("logs")}
+            >
+              {trackTable}
+            </PlaylistLibrary>
+          )}
           {view === "import" && (
             <section className="view">
               <form
@@ -1615,7 +1744,19 @@ export function App() {
                 }}
               >
                 <h2>导入平台歌单</h2>
-                <p>选择音源，粘贴公开歌单链接或歌单 ID。</p>
+                <p>
+                  选择音源，粘贴公开歌单链接或歌单
+                  ID。导入后将保存在“我的歌单”。
+                </p>
+                <label>
+                  歌单名称（可选）
+                  <input
+                    value={importName}
+                    onChange={(e) => setImportName(e.target.value)}
+                    maxLength={100}
+                    placeholder="例如：通勤时光"
+                  />
+                </label>
                 <label>
                   歌单音源
                   <select
@@ -1639,11 +1780,11 @@ export function App() {
                   />
                 </label>
                 <p>
-                  私有歌单可能需要配置音源 Cookie。当前最多读取音源返回的前 1000
-                  首。
+                  私有歌单可能需要配置音源
+                  Cookie。可导入数量取决于原音源解析器；未获得资源的曲目会单独列出。
                 </p>
                 <button className="primary" disabled={busy || !importId.trim()}>
-                  {busy ? "正在导入…" : "导入曲目"}
+                  {busy ? "正在解析并保存…" : "导入并保存歌单"}
                 </button>
               </form>
             </section>

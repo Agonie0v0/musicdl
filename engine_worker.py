@@ -1,5 +1,6 @@
 """Process isolation around the original engine; no rewritten provider protocols."""
 import copy
+import ast
 import hashlib
 import json
 import os
@@ -15,11 +16,13 @@ _clients = {}
 
 
 @contextmanager
-def capture_logs(path, category, task_id):
+def capture_logs(path, category, task_id, transform=None):
     from legacy import app as original
     previous = original.pushlog
     write_lock = threading.Lock()
     def forward(level, message, **kwargs):
+        if transform:
+            message = transform(level, message)
         kwargs.setdefault('category', category)
         kwargs.setdefault('task_id', task_id)
         entry = previous(level, message, **kwargs)
@@ -48,12 +51,46 @@ def search_logged(config, source, keyword, path, task_id):
 
 def playlist_logged(config, url, path, task_id):
     from legacy import app as original
-    with capture_logs(path, 'playlist', task_id):
+    issues = {}
+    def describe(level, message):
+        issue = playlist_issue(message)
+        if issue:
+            key = issue['source_id'] or f"{issue['title']}|{issue['artist']}"
+            issues[key] = issue
+            return f'跳过曲目「{issue["title"]}」 · {issue["artist"] or "歌手未知"} · ID {issue["source_id"] or "未知"}：{issue["reason"]}'
+        return message
+    with capture_logs(path, 'playlist', task_id, describe):
         try:
-            return playlist(config, url)
+            songs = playlist(config, url)
+            return {'songs': songs, 'issues': list(issues.values())}
         except Exception:
             original.pushlog('error', f'歌单解析异常\n{traceback.format_exc()}')
             raise
+
+
+def playlist_issue(message):
+    """Explain native per-track failures without changing any parser decisions."""
+    prefix = 'Fail to parse track info '
+    if not str(message).startswith(prefix):
+        return None
+    try:
+        data = ast.literal_eval(str(message)[len(prefix):])
+        if not isinstance(data, dict):
+            return None
+        artists = data.get('ar') or data.get('artists') or data.get('singer') or []
+        if isinstance(artists, list):
+            artist = ', '.join(str(a.get('name', '')) for a in artists if isinstance(a, dict))
+        else:
+            artist = str(artists)
+        hint = data.get('noCopyrightRcmd') or {}
+        reason = '原音源未返回可用音频地址，该曲目未导入；可尝试换源搜索。'
+        if isinstance(hint, dict) and hint.get('typeDesc'):
+            reason += f' 音源提示：{hint["typeDesc"]}。'
+        return {'source_id': str(data.get('id') or data.get('mid') or data.get('songmid') or ''),
+                'title': str(data.get('name') or data.get('title') or data.get('songname') or '未知曲目'),
+                'artist': artist, 'reason': reason}
+    except (ValueError, SyntaxError, TypeError, RecursionError):
+        return None
 
 
 def client_for(config, source=None):
