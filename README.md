@@ -22,7 +22,7 @@
 git clone https://github.com/Agonie0v0/musicdl.git
 cd musicdl
 cp .env.example .env
-# 编辑 .env，设置自己的用户名、密码和访问主机名
+# 编辑 .env，设置自己的用户名和密码
 mkdir -p music data
 ```
 
@@ -40,7 +40,9 @@ docker compose up -d
 | 挂载目录 | 用途 |
 | --- | --- |
 | `./music` → `/music` | 下载的音乐与歌词 |
-| `./data` → `/data` | 数据库、配置和原曲目对象 |
+| `./data` → `/data` | 收藏、播放列表、下载记录及配置 |
+
+只运行一个应用容器，不需要部署 MySQL、PostgreSQL 或其他数据库服务。SQLite 是程序在 `data` 目录自动创建的本地文件，用于保存收藏、播放列表和下载记录；保留这个目录，重建容器后仍能使用原来的记录。`init: true` 用于回收搜索和下载的子进程。
 
 更新与查看日志：
 
@@ -55,6 +57,29 @@ docker compose logs -f --tail 100
 docker build -t ghcr.io/agonie0v0/musicdl:latest .
 docker compose up -d --pull never
 ```
+
+<details>
+<summary>可选：下载并发、代理和容器限制</summary>
+
+在同一目录创建 `compose.override.yml`，只添加需要的选项：
+
+```yaml
+services:
+  musicdl-webui:
+    environment:
+      MUSICDL_MAX_DOWNLOAD_TASKS: "4"
+      # HTTP_PROXY: http://你的代理地址:7890
+      # HTTPS_PROXY: http://你的代理地址:7890
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+```
+
+执行 `docker compose up -d` 应用修改。音乐目录也可以与其他音乐库服务共享。
+
+</details>
 
 ## Windows
 
@@ -86,7 +111,7 @@ sh start.sh
 | `MUSICDL_DOWNLOAD_DIR` | 音乐目录，源码默认 `musicdl_outputs`，Docker 为 `/music` |
 | `MUSICDL_DATA_DIR` | 数据目录，源码默认 `data`，Docker 为 `/data` |
 | `MUSICDL_CONFIG` | 原版配置路径，源码默认 `config.json`，Docker 为 `/data/config.json` |
-| `MUSICDL_MAX_DOWNLOAD_TASKS` | 下载并发数 `1–4`，默认 `2`，重启生效 |
+| `MUSICDL_MAX_DOWNLOAD_TASKS` | 下载并发数 `1–4`，默认 `2`；Docker 中通过上方覆盖文件设置，重建容器生效 |
 
 音源配置可在设置页面修改；“原版高级配置”保留原引擎的完整 JSON。数据目录可能包含平台凭据，备份时应妥善保存。
 
