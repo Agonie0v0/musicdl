@@ -1,287 +1,96 @@
-# musicdl WebUI
+# musicdl
 
-一个面向个人音乐库的本地 WebUI：用浏览器搜索、试听、解析歌单并下载音乐，底层由 [musicdl](https://github.com/CharlesPikachu/musicdl) 提供音源能力，后端使用 FastAPI，支持 Windows、Linux、macOS，以及 Docker / NAS 部署。
+React/TypeScript 音乐界面 + 原版 musicdl 完整搜索、解析和下载引擎。
 
-> 本项目是 musicdl 的 Web 封装与增强界面，不是 musicdl 引擎本身。音源的可用性取决于上游平台和 musicdl 的实现。
+2026-10-10 修正：此前纯 Rust 版本只迁移五个音源并丢失多条解析路径，造成可下载资源减少。默认启动已切回完整原引擎，保留新版界面。`backend/` 中的 Rust 实验实现仅留作对照，不再作为默认服务。不能以更快地返回不可用结果代替原项目能力。
 
-## 功能一览
+## 音源与解析
 
-- **40+ 音源**：按华语平台、国际流媒体、电台 / 有声、聚合网关、下载站等分类选择。
-- **搜索与试听**：多音源并发搜索、渐进式展示结果；通过后端流式代理播放，支持 Range 请求。
-- **歌单解析**：粘贴受支持平台的歌单链接，批量加入播放列表或下载队列。
-- **后台下载**：支持批量下载、分组任务、实时进度、失败重试、运行日志和已下载文件管理。
-- **媒体信息完善**：按音源能力写入标签、封面和歌词；歌词可保存为 `.lrc`、嵌入音频，或两者同时保存。
-- **音质与来源选择**：结果行显示可用格式与大小，按需选择来源和版本；实际音质取决于音源与账号权限。
-- **配置中心**：音源开关、Cookie、代理、超时、重试、并发、分页、浏览器指纹、UA、下载目录和目录分类均可在网页中调整。
-- **音乐库友好**：支持按音源、歌手、歌手 / 专辑或平铺方式保存，下载目录可以直接挂载给 Navidrome / Jellyfin。
-- **跨平台部署**：提供 Windows / Linux / macOS 启动脚本、Docker Compose 和多架构镜像发布流程。
-- **安全边界**：非回环监听默认要求登录，支持 Trusted Host、Secure / HttpOnly 会话 Cookie，以及固定文件根目录校验。
+- 使用 `musicdl==2.14.0` 的完整注册表，当前 **57 个音源**；平台、聚合网关、下载站、电台等均从引擎动态读取，没有五源白名单。
+- 搜索直接调用原版各源 `.search()`，完整传递线程数、请求覆盖及搜索规则；下载直接调用原版 `MusicClient.download()`。
+- 原版 `SongInfo` 完整传递：请求头、Cookie、预取音频、分集、HLS 和专用流对象均保留。不能在线播放的结果仍可下载。
+- 原版 `config.json` 优先，包括分源初始化、Cookie、代理范围、请求参数及解析配置。新版设置页提供“原版高级配置”编辑完整 JSON；普通设置不会丢弃高级参数。
+- 歌单链接完整传给原版 `parseplaylist()`，不再先截断成 ID。支持展开分集后选择下载。
+- 原解析器返回什么音质就展示什么音质，不凭平台元数据虚构多个可用版本。不同解析源返回的版本作为独立结果。平台 Cookie 不是全局必填条件；各音源按自身解析逻辑处理。
 
-## 工作方式
+“保留全部音源”表示没有删减原引擎能力，不表示外部网站永久可用。部分平台仍可能需要自己的账号、Cookie 或外部媒体工具；引擎原有的默认配置保持不变。
 
-```mermaid
-flowchart LR
-  UI["浏览器 WebUI<br/>static/index.html"] --> API["FastAPI 服务<br/>app.py"]
-  API --> Engine["musicdl 引擎<br/>40+ 音源"]
-  API --> Tasks["下载任务 / 日志"]
-  API --> Storage["音乐库目录<br/>music/"]
-  API --> Config["运行配置<br/>config.json"]
-```
+## 搜索与界面
 
-## 快速开始
+六个独立进程并行运行原音源搜索，按完成顺序通过 SSE 返回；同配置/关键词/音源合并重复请求，结果缓存 120 秒。慢源不阻塞已经完成的源。取消搜索立即停止页面结果更新；正在执行的原引擎请求可能继续到本次解析结束并填入缓存，不冒称能即时中断所有第三方请求。
 
-### 本地运行
+保留同步歌词、歌词跳转/字号、收藏、播放列表、批量选择、暂停/取消/重试和文件管理。下载运行在独立进程，进度来自原引擎字节计数；暂停会终止该任务进程，继续从头下载。下载成功后才把文件从任务临时目录放入音乐库。原引擎没有上报字节的特殊协议显示不定进度，不伪造百分比。
 
-环境要求：
+## Windows
 
-- Python 3.11–3.13
-- Git
-- Docker 部署不需要在宿主机安装 Python；镜像已包含 FFmpeg
+推荐使用 **musicdl-full-engine-windows.zip**，解压后双击 `start.bat`，访问 http://127.0.0.1:8765。包内包含 Python 运行时、原引擎全部基础依赖和已构建前端，无需另外安装 Python、Node.js 或 Rust。必须先完整解压再运行；重复启动会打开已运行的服务。失败时窗口保留，错误写入 `logs/startup.log`。请勿继续用上一版 `musicdl-rust-windows.zip` 或单独的 `musicdl-server.exe`。
 
-```bash
-git clone https://github.com/Agonie0v0/musicdl.git
-cd musicdl
-```
-
-Windows：
-
-```bat
-start.bat
-```
-
-Linux / macOS：
-
-```bash
-chmod +x start.sh
-./start.sh
-```
-
-启动脚本会自动创建虚拟环境并安装依赖，然后打开：
-
-<http://127.0.0.1:8765>
-
-Windows 启动脚本会按 3.13、3.12、3.11 的顺序寻找 Python Launcher。Linux / macOS 请确保 `python3` 可用。
-
-如果只想在启动时自动升级 musicdl 引擎：
-
-```bash
-MUSICDL_AUTO_UPDATE=1 ./start.sh
-```
-
-Windows PowerShell：
+源码启动需要 Python 3.11+ 和 Node.js 24：
 
 ```powershell
-$env:MUSICDL_AUTO_UPDATE = "1"
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+cd frontend
+npm ci
+npm run build
+cd ..
 .\start.bat
 ```
 
-### Docker / NAS 部署
+Linux/macOS 使用 `./start.sh`。本次 Windows 包使用 Python 3.14.7；部分特殊流媒体下载器需要 FFmpeg 等外部程序，沿用原引擎要求。
 
-默认 Compose 会在本地构建镜像，并把 `./music` 作为下载目录、`./data` 作为配置目录。
+## Docker / NAS
 
-```bash
-git clone https://github.com/Agonie0v0/musicdl.git
-cd musicdl
+GitHub Actions 在每次推送到 `main` 后自动发布 `ghcr.io/agonie0v0/musicdl-full-engine:latest`，同时生成对应提交的 `sha-...` 标签。镜像支持 x86_64 和 ARM64 NAS。当前 GitHub 仓库及 GHCR 镜像包为私有；在飞牛 NAS 的终端先用具有 `read:packages` 权限的 GitHub classic token 登录 GHCR：
 
-mkdir -p music data
+```sh
+echo '你的 GitHub token' | docker login ghcr.io -u Agonie0v0 --password-stdin
+```
+
+在飞牛「Docker / Compose」中创建项目，放入本仓库的 `docker-compose.yml` 和修改后的 `.env`。将 `MUSICDL_BIND=0.0.0.0`、`MUSICDL_TRUSTED_HOSTS=NAS的局域网IP,localhost,127.0.0.1`，并把示例密码换成自己的密码。把 `./music` 和 `./data` 放在 NAS 的持久目录；容器以 UID/GID `10001:10001` 运行，这两个目录必须可写。启动后访问 `http://NAS的局域网IP:8765`。更新时重新拉取镜像并重建容器，数据仍保存在挂载目录。
+
+命令行部署：
+
+```sh
 cp .env.example .env
-# 编辑 .env，至少修改 MUSICDL_PASS
-
-docker compose up -d --build
-docker compose ps
-docker compose logs -f
+# 在 .env 中设置自己的账号密码、NAS IP、MUSICDL_BIND=0.0.0.0
+mkdir -p music data
+docker compose up -d --pull always
 ```
 
-首次启动后访问 <http://127.0.0.1:8765>。Linux / NAS 如果出现写入权限问题，执行：
+镜像运行 Python 完整引擎与前端静态文件，包含 FFmpeg。Compose 默认只映射宿主机 127.0.0.1；局域网访问设置 `MUSICDL_BIND=0.0.0.0`，并将 NAS IP/域名加入 `MUSICDL_TRUSTED_HOSTS`。本机 Docker daemon 未运行，未完成 NAS 实机验证。
 
-```bash
-chown -R 10001:10001 music data
-```
+## 配置、登录和数据
 
-容器使用 UID / GID `10001:10001` 运行，不建议使用 `777` 解决权限问题。
+默认本机访问可不设置登录。配置了 `MUSICDL_USER` 和 `MUSICDL_PASS` 就启用登录，用户名与密码必须同时设置；示例密码必须自行替换。非本地监听需要认证。
 
-#### 反向代理与 HTTPS
-
-服务器部署建议让 Caddy、Nginx、Lucky 等反向代理负责 HTTPS，回源到 `127.0.0.1:8765`，并把外部域名加入 `MUSICDL_TRUSTED_HOSTS`。
-
-`MUSICDL_COOKIE_SECURE=1` 时，会话 Cookie 只通过 HTTPS 发送；如果只是本机临时使用 HTTP，可以在 `.env` 中暂时设置为 `0`。不要把未经过 HTTPS 保护的 8765 端口直接暴露到公网。
-
-#### 接入 Navidrome / Jellyfin
-
-关键是让 WebUI 的 `/music` 与媒体服务器的音乐目录指向同一个宿主机目录。Compose 中已经附带了注释掉的 Navidrome 服务示例，取消注释即可一起启动：
-
-```yaml
-navidrome:
-  image: deluan/navidrome:latest
-  ports:
-    - "4533:4533"
-  volumes:
-    - ./music:/music:ro
-    - ./navidrome-data:/data
-  environment:
-    - ND_SCANSCHEDULE=1m
-```
-
-然后在设置中将“下载分类方式”选择为“歌手 / 专辑”，文件会按照以下形式保存：
-
-```text
-music/
-└── 歌手/
-    └── 专辑/
-        └── 歌名.ext
-```
-
-## 设置说明
-
-点击页面右上角的设置按钮即可配置。所有配置默认保存到项目目录的 `config.json`；Docker 中建议使用 `/data/config.json` 持久化。
-
-| 设置项 | 作用 |
+| 变量 | 用途 |
 | --- | --- |
-| 音源选择 | 选择参与搜索的音源；“默认五源”为咪咕、网易云、QQ、酷我、千千 |
-| Cookie | 每个音源单独粘贴浏览器请求头中的完整 Cookie，程序会自动解析并用于搜索、解析和下载 |
-| 基础参数 | 每源结果数、分页大小、重试次数、请求超时、默认线程数 |
-| HTTP 代理 | 为全部音源，或仅指定音源设置代理 |
-| 下载分类方式 | 按音源、按歌手、歌手 / 专辑、全部平铺 |
-| 歌词保存方式 | 单独 `.lrc`、嵌入歌曲、两者同时保存 |
-| 高级开关 | 搜索 / 解析 / 下载的浏览器指纹、随机 UA、自动代理、会话复用、严格分页 |
-| 专家 JSON | 对单个音源覆盖初始化参数、线程数、请求参数和搜索规则 |
+| MUSICDL_BIND / MUSICDL_HOST / MUSICDL_PORT | 默认 127.0.0.1:8765；HOST 优先，Compose BIND 为宿主机绑定 |
+| MUSICDL_USER / MUSICDL_PASS | 服务登录账号，可使用原版 `_FILE` 密钥文件方式 |
+| MUSICDL_TRUSTED_HOSTS | 明确允许访问的域名/IP |
+| MUSICDL_COOKIE_SECURE | HTTP 使用 0，HTTPS 使用 1 |
+| MUSICDL_DOWNLOAD_DIR / MUSICDL_FILE_ROOT | 受约束的音乐库目录；默认 musicdl_outputs |
+| MUSICDL_DATA_DIR | 默认 data，保存 SQLite 与原曲目对象 |
+| MUSICDL_CONFIG | 原版完整 config.json 路径；默认项目根目录，Docker 为 /data/config.json |
+| MUSICDL_MAX_DOWNLOAD_TASKS | 下载并发 1–4，默认 2，重启生效 |
 
-Cookie 示例格式：
+原版配置文件存在时完整优先加载；不存在时可导入此前 Rust 数据库里的基础音源偏好。SQLite 收藏、播放列表和记录继续使用原表结构。失效的旧曲目会按原音源重新查找完全匹配的歌曲，不会随意下载搜索列表第一首。数据目录包含音源凭据与原曲目对象，不要公开分享。
 
-```text
-MUSIC_U=...; qm_keyst=...; 其他键值=...
+协议参考和许可证见 [NOTICE.md](NOTICE.md)。验证方法、成功及失败结果见 [VALIDATION.md](VALIDATION.md)。
+
+## 开发检查
+
+```sh
+python -m pip install -r requirements.txt pytest httpx
+python -m pytest tests/test_engine_compat.py -q
+python -m pytest legacy/tests/test_app.py -q
+cd frontend
+npm run format:check
+npm test
+npm run build
+npx playwright install chromium
+npm run test:browser
 ```
 
-Cookie、代理和 `config.json` 都可能包含敏感信息，请勿提交到公开仓库或发到日志中。
-
-## 环境变量
-
-### Docker / 服务器常用变量
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `MUSICDL_USER` | 必填 | Web 登录用户名 |
-| `MUSICDL_PASS` | 必填 | Web 登录密码，建议使用随机长密码 |
-| `MUSICDL_TRUSTED_HOSTS` | 必填 | 允许访问的 Host，逗号分隔；至少包含 `localhost,127.0.0.1` |
-| `MUSICDL_BIND` | `127.0.0.1` | Compose 在宿主机上的绑定地址 |
-| `MUSICDL_HOST_PORT` | `8765` | 宿主机端口；容器内端口保持为 8765 |
-| `MUSICDL_COOKIE_SECURE` | `1` | 是否仅通过 HTTPS 发送会话 Cookie |
-| `MUSICDL_HOST` | `0.0.0.0`（容器） | FastAPI 在容器内监听的地址 |
-| `MUSICDL_PORT` | `8765` | FastAPI 监听端口 |
-| `MUSICDL_WORKDIR` | `/music`（容器） | musicdl 下载目录 |
-| `MUSICDL_FILE_ROOT` | `/music`（容器） | 文件管理器允许访问的固定根目录 |
-| `MUSICDL_CONFIG` | `/data/config.json`（容器） | 配置文件路径 |
-| `MUSICDL_PLAYLIST_HOSTS` | 空 | 额外允许的歌单域名后缀，逗号分隔 |
-| `MUSICDL_ALLOW_SELF_UPDATE` | `0`（Docker） | 是否允许网页升级 musicdl；容器默认关闭 |
-| `HTTP_PROXY` / `HTTPS_PROXY` | 空 | 访问需要代理的音源时使用 |
-
-本地运行时，配置路径默认为 `config.json`，下载目录默认为 `musicdl_outputs/`。启动脚本还支持 `MUSICDL_AUTO_UPDATE=1`，每次启动前自动升级 musicdl。
-
-## 升级 musicdl 引擎
-
-音源接口变化通常由底层 musicdl 引擎修复。本项目对可选的内部增强做了兼容保护，升级后即使某个增强补丁失效，核心搜索、播放和下载仍可继续启动。
-
-| 场景 | 操作 |
-| --- | --- |
-| 本地网页 | 设置 → 关于 musicdl 引擎 → 检查更新 / 一键升级 |
-| Windows / Linux / macOS 手动升级 | `venv\Scripts\pip install -U musicdl` 或 `venv/bin/pip install -U musicdl` |
-| 启动时自动升级 | 设置 `MUSICDL_AUTO_UPDATE=1` 后运行启动脚本 |
-| Docker / NAS | `docker compose build --pull --no-cache && docker compose up -d` |
-| 回退版本 | `pip install musicdl==2.13.1`，或在 `requirements.txt` 中固定版本 |
-
-Docker 默认关闭容器内自更新，推荐通过重新构建镜像升级。手动执行 `python app.py` 时，网页触发重启后不会像启动脚本那样自动拉起服务。
-
-## API 入口
-
-FastAPI 文档：<http://127.0.0.1:8765/docs>
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `GET` | `/api/meta` | 版本、音源分类和默认音源 |
-| `GET` | `/api/health` | musicdl 版本、音源注册数、增强补丁状态 |
-| `GET` / `PUT` | `/api/config` | 读取 / 保存配置 |
-| `POST` | `/api/search` | 搜索歌曲，可限定音源 |
-| `POST` | `/api/playlist` | 解析歌单链接 |
-| `GET` | `/api/song/{id}` | 歌曲详情、歌词、封面和可播放性 |
-| `GET` | `/api/stream/{id}` | 音频代理流，支持 Range |
-| `POST` | `/api/resolve` | 按来源、歌名和歌手重新解析过期链接 |
-| `GET` | `/api/song/{id}/episodes` | 展开 FM / 专辑剧集 |
-| `POST` | `/api/download` | 创建单曲或批量下载任务 |
-| `GET` | `/api/tasks` | 查询任务及进度 |
-| `POST` | `/api/tasks/{task_id}/retry` | 重试任务中的失败歌曲 |
-| `GET` | `/api/files` / `/api/file` | 浏览和下载已保存文件 |
-| `GET` | `/api/logs` | 查看运行日志 |
-| `POST` | `/api/cache/clear` | 清理缓存和空目录，不删除音频文件 |
-
-写入类请求需要带上：
-
-```http
-X-MusicDL-Request: 1
-```
-
-启用登录后，还需要先通过 `/api/auth/login` 建立会话。
-
-## 开发与测试
-
-```bash
-python -m venv .venv
-
-# Linux / macOS
-source .venv/bin/activate
-
-# Windows PowerShell
-.\.venv\Scripts\Activate.ps1
-
-python -m pip install -r requirements-dev.txt
-pytest
-node tests/check_frontend.js
-```
-
-测试覆盖认证与 Host 校验、文件根目录边界、配置原子写入、下载任务、过期歌曲、更新锁和前端脚本 / DOM ID 检查。
-
-## 常见问题
-
-### 搜不到某个音源
-
-先在设置中确认音源已启用，再检查 Cookie 和代理。部分平台需要浏览器指纹，可按需打开对应的 `curl_cffi` 开关；也可以先升级 musicdl 引擎。
-
-### 能搜索但播放或下载失败
-
-检查该音源是否需要登录 Cookie 或代理，并分别尝试打开“解析用浏览器指纹”和“下载用浏览器指纹”。结果链接过期时，前端会通过标题 + 歌手自动重新解析。
-
-### 登录后又回到登录页
-
-如果使用 HTTP 访问而 `MUSICDL_COOKIE_SECURE=1`，浏览器可能不会发送会话 Cookie。服务器应配置 HTTPS；仅本机临时测试可将它设为 `0`。
-
-### Docker 下载目录没有文件
-
-确认 `./music` 已挂载、宿主机目录属于 UID / GID `10001:10001`，并检查：
-
-```bash
-docker compose logs -f
-docker compose ps
-```
-
-### 想恢复默认设置
-
-停止服务后删除 `config.json`（Docker 删除 `data/config.json`），再次启动会按默认配置生成。删除前请先备份 Cookie 和其他设置。
-
-## 项目结构
-
-```text
-app.py                  # FastAPI 后端：搜索、播放、下载、配置、文件、日志
-static/index.html       # WebUI 与交互逻辑
-Dockerfile              # 包含 FFmpeg 的容器镜像
-docker-compose.yml      # Docker / NAS 部署配置
-start.bat / start.sh    # Windows / Linux·macOS 启动脚本
-tests/                  # 后端测试与前端静态检查
-LICENSE-musicsquare     # 原 musicsquare 界面的 Apache-2.0 许可
-config.json             # 运行时生成的配置文件，不应提交
-musicdl_outputs/        # 本地默认下载目录
-```
-
-## 许可与致谢
-
-- Web 界面基于 [CharlesPikachu/musicsquare](https://github.com/CharlesPikachu/musicsquare)，相关 Apache-2.0 许可文本见 [`LICENSE-musicsquare`](LICENSE-musicsquare)。
-- 音源与下载能力基于 [CharlesPikachu/musicdl](https://github.com/CharlesPikachu/musicdl)。
-- 使用本项目时，请遵守所在地法律、上游平台服务条款和内容版权要求，仅下载你有权使用的内容。
+Windows 浏览器测试可将 `MUSICDL_BROWSER_EXECUTABLE` 指向 Edge/Chrome。

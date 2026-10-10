@@ -1,4 +1,6 @@
 venv/
+.venv/
+logs/
 musicdl_outputs/
 config.json
 __pycache__/
@@ -9,3 +11,12 @@ navidrome-data/
 .env
 .env.*
 !.env.example
+target/
+/musicdl-server.exe
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+*.db
+*.db-shm
+*.db-wal
+output/releases/

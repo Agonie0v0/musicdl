@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-import app
+from legacy import app
 
 
 WRITE_HEADERS = {'X-MusicDL-Request': '1'}

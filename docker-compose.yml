@@ -1,27 +1,27 @@
-# NAS / 服务器一键部署：docker compose up -d，然后访问 http://<主机IP>:8765
+# 默认本机访问：http://127.0.0.1:8765；NAS 局域网访问配置见 README。
 #
 # 关键点：把下载目录 (/music) 挂到 navidrome 的音乐库同一个宿主机文件夹，
-# musicdl 下好的歌会以 “音源/歌名.ext” 平铺进去，navidrome 扫描即入库。
+# 下载文件按界面设置组织目录，navidrome 扫描同一音乐目录即可入库。
 services:
   musicdl-webui:
-    build: .
-    # image: ghcr.io/agonie0v0/musicdl:latest        # 私有 GHCR 镜像需先 docker login ghcr.io
+    image: ghcr.io/agonie0v0/musicdl-full-engine:latest
+    pull_policy: always
     restart: unless-stopped
     init: true
     ports:
       - "${MUSICDL_BIND:-127.0.0.1}:${MUSICDL_HOST_PORT:-8765}:8765"
     volumes:
       - ./music:/music        # 下载目录（=navidrome 音乐库，见下方）
-      - ./data:/data          # 保存 config.json（音源/Cookie/代理等设置）
+      - ./data:/data          # 保存 SQLite 数据库（音源/Cookie/代理等设置）
     environment:
-      MUSICDL_WORKDIR: /music
-      MUSICDL_FILE_ROOT: /music
+      MUSICDL_DOWNLOAD_DIR: /music
+      MUSICDL_DATA_DIR: /data
       MUSICDL_CONFIG: /data/config.json
+      MUSICDL_MAX_DOWNLOAD_TASKS: "${MUSICDL_MAX_DOWNLOAD_TASKS:-2}"
       MUSICDL_USER: "${MUSICDL_USER:?请在 .env 中设置 MUSICDL_USER}"
       MUSICDL_PASS: "${MUSICDL_PASS:?请在 .env 中设置 MUSICDL_PASS}"
       MUSICDL_TRUSTED_HOSTS: "${MUSICDL_TRUSTED_HOSTS:?请在 .env 中设置访问域名，并包含 localhost,127.0.0.1}"
-      MUSICDL_COOKIE_SECURE: "${MUSICDL_COOKIE_SECURE:-1}"
-      MUSICDL_ALLOW_SELF_UPDATE: "0"
+      MUSICDL_COOKIE_SECURE: "${MUSICDL_COOKIE_SECURE:-0}"
       # HTTP_PROXY: http://host.docker.internal:7890   # 需要代理时打开
     security_opt:
       - no-new-privileges:true

@@ -1,31 +1,42 @@
 @echo off
-cd /d %~dp0
-set PYTHONIOENCODING=utf-8
-set PYTHONUTF8=1
-set PYVER=
-for %%V in (3.13 3.12 3.11) do (
-    py -%%V -c "import sys" >nul 2>&1
-    if not errorlevel 1 if not defined PYVER set PYVER=%%V
+cd /d "%~dp0"
+if not exist launcher.py goto incomplete
+if exist runtime\python.exe goto bundled
+if exist .venv\Scripts\python.exe goto source
+where python >nul 2>&1 || goto needpython
+python -m venv .venv || goto failed
+.venv\Scripts\python.exe -m pip install -r requirements.txt || goto failed
+:source
+if not exist frontend\dist\index.html (
+  where npm >nul 2>&1 || goto neednode
+  pushd frontend
+  call npm ci || (popd & goto failed)
+  call npm run build || (popd & goto failed)
+  popd
 )
-if not defined PYVER (
-    echo [musicdl-webui] Python 3.11-3.13 not found.
-    exit /b 1
+.venv\Scripts\python.exe launcher.py
+goto finished
+:bundled
+runtime\python.exe launcher.py
+goto finished
+:incomplete
+echo Extract the ENTIRE ZIP to a folder before running start.bat.
+goto failed
+:needpython
+echo Install Python 3.11+ or use the full-engine Windows package.
+goto failed
+:neednode
+echo Node.js is required to build the frontend from source.
+goto failed
+:failed
+set "musicdl_exit=1"
+goto report
+:finished
+set "musicdl_exit=%errorlevel%"
+:report
+if not "%musicdl_exit%"=="0" (
+  echo.
+  echo Startup failed. See the error above and logs\startup.log.
+  pause
 )
-if not exist venv\Scripts\python.exe (
-    echo [musicdl-webui] creating venv...
-    py -%PYVER% -m venv venv || exit /b 1
-)
-venv\Scripts\python -m pip install -r requirements.txt || exit /b 1
-REM 想每次启动自动把 musicdl 升到最新，设 MUSICDL_AUTO_UPDATE=1 后再运行本脚本
-if "%MUSICDL_AUTO_UPDATE%"=="1" (
-    echo [musicdl-webui] updating musicdl to latest...
-    venv\Scripts\python -m pip install -U musicdl || exit /b 1
-)
-echo [musicdl-webui] starting at http://127.0.0.1:8765
-:run
-venv\Scripts\python app.py
-REM 退出码 88 = 网页里点了“重启服务”（如升级 musicdl 后），自动拉起
-if %errorlevel%==88 (
-    echo [musicdl-webui] restarting...
-    goto run
-)
+exit /b %musicdl_exit%

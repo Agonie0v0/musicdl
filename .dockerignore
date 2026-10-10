@@ -1,4 +1,11 @@
 venv/
+.venv/
+.analysis/
+.impeccable/
+output/
+target/
+frontend/node_modules/
+frontend/dist/
 musicdl_outputs/
 music/
 data/
@@ -8,7 +15,5 @@ __pycache__/
 .git/
 .env
 .env.*
-tests/
-task_plan.md
-findings.md
-progress.md
+legacy/tests/
+output/releases/
