@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && groupadd --gid 10001 musicdl && useradd --uid 10001 --gid musicdl --create-home musicdl \
     && mkdir -p /music /data /app/frontend /licenses && chown -R musicdl:musicdl /music /data /app
 WORKDIR /app
+ENV HOME=/home/musicdl
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py engine_api.py engine_worker.py docker-entrypoint.py ./
