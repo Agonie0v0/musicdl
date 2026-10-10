@@ -32,6 +32,16 @@ try {
     }),
     errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  await page.route("**/test-cover-missing.png", (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  );
+  await page.route("**/test-cover.svg", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><rect width="480" height="480" fill="#4b477b"/><circle cx="240" cy="220" r="145" fill="#c4b2e3"/><circle cx="240" cy="220" r="90" fill="#68628e"/><circle cx="240" cy="220" r="12" fill="#4b477b"/><text x="40" y="420" fill="#fff" font-family="sans-serif" font-size="32">测试专辑 / TEST FIXTURE</text></svg>',
+    }),
+  );
   const track = {
     id: "test-1",
     source: "netease",
@@ -40,7 +50,7 @@ try {
     artist: "测试歌手",
     album: "测试专辑",
     duration: 8,
-    cover: null,
+    cover: `${base}/test-cover-missing.png`,
     qualities: [
       {
         id: "lossless",
@@ -191,12 +201,28 @@ try {
     });
   });
   await page.goto(base);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.waitForFunction(
+    () => document.documentElement.dataset.theme === "dark",
+  );
+  await page.getByLabel("界面主题").selectOption("light");
+  await page.waitForFunction(
+    () => document.documentElement.dataset.theme === "light",
+  );
+  await mkdir("../output", { recursive: true });
+  await page.screenshot({ path: "../output/test-ui-home.png" });
   await page.getByLabel("搜索音乐", { exact: true }).fill("测试");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
   await page
     .getByRole("button", { name: "播放 测试曲目", exact: true })
     .waitFor();
   assert.equal(await page.locator("tbody tr").count(), 1);
+  await page.getByLabel("更多操作 测试曲目").click();
+  await page
+    .locator(".track-menu")
+    .getByRole("button", { name: "收藏曲目", exact: true })
+    .waitFor();
+  await page.getByLabel("更多操作 测试曲目").click();
   await page
     .getByRole("button", { name: "播放 测试曲目", exact: true })
     .click();
@@ -204,7 +230,30 @@ try {
     () => document.querySelector("audio").currentTime > 0.05,
   );
   assert.equal(await page.locator("audio").evaluate((a) => a.error), null);
+  await page.waitForFunction(
+    () => document.querySelector(".mini-track img")?.style.display === "none",
+  );
+  track.cover = `${base}/test-cover.svg`;
+  await page
+    .getByRole("button", { name: "播放 测试曲目", exact: true })
+    .click();
+  await page.waitForFunction(() => {
+    const image = document.querySelector(".mini-track img");
+    return image?.naturalWidth > 0 && image.style.display !== "none";
+  });
   await page.getByRole("button", { name: "正在播放", exact: true }).click();
+  await page.getByLabel("切换随机播放", { exact: true }).click();
+  assert.ok(
+    await page
+      .getByLabel("切换随机播放", { exact: true })
+      .evaluate((e) => e.classList.contains("active")),
+  );
+  await page.getByLabel("切换列表循环", { exact: true }).click();
+  assert.ok(
+    await page
+      .getByLabel("切换列表循环", { exact: true })
+      .evaluate((e) => !e.classList.contains("active")),
+  );
   await page.locator(".full-lyrics button").nth(1).click();
   await page
     .waitForFunction(
@@ -227,6 +276,9 @@ try {
   assert.equal(await page.locator(".full-lyrics.large").count(), 1);
   await mkdir("../output", { recursive: true });
   await page.screenshot({ path: "../output/test-ui-player.png" });
+  await page.getByLabel("界面主题").selectOption("dark");
+  await page.screenshot({ path: "../output/test-ui-player-dark.png" });
+  await page.getByLabel("界面主题").selectOption("light");
   await page.getByRole("button", { name: "收藏当前曲目", exact: true }).click();
   assert.equal(favorites.length, 1);
   await page.getByRole("button", { name: "加入播放列表", exact: true }).click();
@@ -248,6 +300,15 @@ try {
   assert.equal(jobs[0].status, "downloading");
   await page.getByRole("button", { name: "搜索音乐", exact: true }).click();
   await page.screenshot({ path: "../output/test-ui-search.png" });
+  await page.getByLabel("界面主题").selectOption("dark");
+  await page.screenshot({ path: "../output/test-ui-search-dark.png" });
+  await page.getByLabel("界面主题").selectOption("light");
+  await page.keyboard.press("Control+k");
+  assert.ok(
+    await page
+      .getByLabel("搜索音乐", { exact: true })
+      .evaluate((e) => e === document.activeElement),
+  );
   for (const width of [390, 768, 1440]) {
     await page.setViewportSize({ width, height: 844 });
     assert.ok(
@@ -283,6 +344,19 @@ try {
   assert.equal(await page.locator(".source-setting").count(), 6);
   assert.ok(await page.getByText("GDStudio", { exact: true }).isVisible());
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await page.reload();
+  await page.waitForFunction(
+    () => document.documentElement.dataset.theme === "light",
+  );
+  assert.ok(await page.getByText("最近搜索", { exact: true }).isVisible());
+  await page.getByLabel("界面主题").selectOption("system");
+  await page.waitForFunction(
+    () => document.documentElement.dataset.theme === "dark",
+  );
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.waitForFunction(
+    () => document.documentElement.dataset.theme === "light",
+  );
   assert.deepEqual(errors, []);
   console.log(
     "Browser integration passed: search, real audio, lyric seeking, favorites, playlist, quality selection, queue controls, settings, responsive layout.",

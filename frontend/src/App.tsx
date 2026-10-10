@@ -24,6 +24,11 @@ import {
   Shuffle,
   Repeat,
   LogOut,
+  Sun,
+  Moon,
+  Monitor,
+  History,
+  MoreHorizontal,
 } from "lucide-react";
 import { api } from "./api";
 import { parseLrc, clock, type LyricLine } from "./lyrics";
@@ -59,6 +64,42 @@ const bytes = (n: number) =>
       ? `${(n / 1024).toFixed(1)} KB`
       : `${(n / 1048576).toFixed(1)} MB`;
 export function App() {
+  const [theme, setTheme] = useState<"system" | "light" | "dark">(() => {
+    try {
+      const saved = localStorage.getItem("musicdl-theme");
+      return saved === "light" || saved === "dark" ? saved : "system";
+    } catch {
+      return "system";
+    }
+  });
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    try {
+      const saved: unknown = JSON.parse(
+        localStorage.getItem("musicdl-searches") || "[]",
+      );
+      return Array.isArray(saved)
+        ? saved.filter((v): v is string => typeof v === "string").slice(0, 8)
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const system = matchMedia("(prefers-color-scheme: dark)");
+    const update = () => {
+      document.documentElement.dataset.theme =
+        theme === "system" ? (system.matches ? "dark" : "light") : theme;
+    };
+    update();
+    try {
+      localStorage.setItem("musicdl-theme", theme);
+    } catch {
+      /* Storage is optional. */
+    }
+    system.addEventListener("change", update);
+    return () => system.removeEventListener("change", update);
+  }, [theme]);
   const [view, setView] = useState<View>("search"),
     [query, setQuery] = useState(""),
     [tracks, setTracks] = useState<Track[]>([]),
@@ -107,6 +148,32 @@ export function App() {
     startTime = useRef(0),
     currentRef = useRef<Track | null>(null),
     nextRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (loginRequired || document.querySelector("dialog[open]")) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setView("search");
+        requestAnimationFrame(() => searchInput.current?.focus());
+      } else if (
+        event.code === "Space" &&
+        !(
+          event.target instanceof HTMLElement &&
+          (event.target.closest("input,textarea,select,button,a") ||
+            event.target.isContentEditable)
+        )
+      ) {
+        event.preventDefault();
+        const element = audio.current;
+        if (currentRef.current && element) {
+          if (element.paused) void element.play().catch(fail);
+          else element.pause();
+        }
+      }
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, [loginRequired]);
   const fail = (error: unknown) =>
     setNotice(error instanceof Error ? error.message : String(error));
   async function load() {
@@ -692,6 +759,46 @@ export function App() {
                     >
                       <Heart />
                     </button>
+                    <details className="track-menu">
+                      <summary aria-label={`更多操作 ${track.title}`}>
+                        <MoreHorizontal />
+                      </summary>
+                      <div>
+                        <button
+                          onClick={(e) => {
+                            void addToPlaylist([track]);
+                            e.currentTarget
+                              .closest("details")
+                              ?.removeAttribute("open");
+                          }}
+                        >
+                          <Plus />
+                          加入播放列表
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            chooseDownload([track]);
+                            e.currentTarget
+                              .closest("details")
+                              ?.removeAttribute("open");
+                          }}
+                        >
+                          <Download />
+                          选择下载版本
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            void favorite(track);
+                            e.currentTarget
+                              .closest("details")
+                              ?.removeAttribute("open");
+                          }}
+                        >
+                          <Heart />
+                          {favIds.has(track.id) ? "取消收藏" : "收藏曲目"}
+                        </button>
+                      </div>
+                    </details>
                   </div>
                 </td>
               </tr>
@@ -779,19 +886,20 @@ export function App() {
               [
                 "search",
                 "player",
+                "favorites",
                 "import",
                 "queue",
-                "favorites",
                 "files",
               ] as View[]
             ).map((name, i) => {
-              const Icon = [Search, Music2, ListMusic, Download, Heart, Folder][
+              const Icon = [Search, Music2, Heart, ListMusic, Download, Folder][
                 i
               ];
               return (
                 <button
                   key={name}
                   className={`nav-item ${view === name ? "active" : ""}`}
+                  aria-current={view === name ? "page" : undefined}
                   onClick={() => {
                     setView(name);
                     setSourceFilter("all");
@@ -821,6 +929,19 @@ export function App() {
             })}
           </nav>
           <div className="sidebar-bottom">
+            {current && (
+              <button
+                className="sidebar-record"
+                onClick={() => setView("player")}
+              >
+                <Cover track={current} />
+                <span>
+                  <strong>{current.title}</strong>
+                  <small>{current.artist}</small>
+                </span>
+                <AudioLines />
+              </button>
+            )}
             <button
               className={`nav-item ${view === "settings" ? "active" : ""}`}
               onClick={() => setView("settings")}
@@ -833,7 +954,10 @@ export function App() {
                 <Music2 />
               </span>
               <span>
-                本地音乐库<small>浏览器播放与批量下载</small>
+                本地音乐库
+                <small>
+                  {favorites.length} 首收藏 · {playlist.length} 首待播
+                </small>
               </span>
               <Button
                 label="退出登录"
@@ -856,6 +980,24 @@ export function App() {
               <p>{views[view][1]}</p>
             </div>
             <div className="top-actions">
+              <label className="theme-control">
+                {theme === "system" ? (
+                  <Monitor />
+                ) : theme === "dark" ? (
+                  <Moon />
+                ) : (
+                  <Sun />
+                )}
+                <select
+                  aria-label="界面主题"
+                  value={theme}
+                  onChange={(e) => setTheme(e.target.value as typeof theme)}
+                >
+                  <option value="system">跟随系统</option>
+                  <option value="light">浅色</option>
+                  <option value="dark">深色</option>
+                </select>
+              </label>
               {searching && (
                 <button
                   className="secondary"
@@ -886,17 +1028,37 @@ export function App() {
                     className="searchbox"
                     onSubmit={(e) => {
                       e.preventDefault();
+                      const keyword = query.trim();
+                      if (keyword) {
+                        const history = [
+                          keyword,
+                          ...recentSearches.filter((v) => v !== keyword),
+                        ].slice(0, 8);
+                        setRecentSearches(history);
+                        try {
+                          localStorage.setItem(
+                            "musicdl-searches",
+                            JSON.stringify(history),
+                          );
+                        } catch {
+                          /* Storage is optional. */
+                        }
+                      }
                       void search();
                     }}
                   >
                     <Search />
                     <input
+                      ref={searchInput}
                       aria-label="搜索音乐"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       placeholder="搜索歌曲、歌手或专辑"
                       maxLength={200}
                     />
+                    <kbd className="search-shortcut" title="聚焦搜索">
+                      Ctrl K
+                    </kbd>
                     <button
                       type="button"
                       className="scope"
@@ -912,6 +1074,87 @@ export function App() {
                       搜索
                     </button>
                   </form>
+                  {!tracks.length && !searching && (
+                    <div className="search-welcome">
+                      <div className="welcome-art">
+                        <AudioLines />
+                      </div>
+                      <div>
+                        <h2>今天想听什么？</h2>
+                        <p>搜索歌曲、歌手或专辑，选择音源与音质版本。</p>
+                      </div>
+                      <div className="library-shortcuts">
+                        <button onClick={() => setView("favorites")}>
+                          <Heart />
+                          我的收藏<span>{favorites.length} 首</span>
+                        </button>
+                        <button onClick={() => setShowPlaylist(true)}>
+                          <ListMusic />
+                          播放列表<span>{playlist.length} 首</span>
+                        </button>
+                        <button onClick={() => setView("import")}>
+                          <Plus />
+                          导入歌单
+                        </button>
+                      </div>
+                      {!!recentSearches.length && (
+                        <div className="recent-searches">
+                          <History />
+                          <span>最近搜索</span>
+                          {recentSearches.map((keyword) => (
+                            <button
+                              key={keyword}
+                              onClick={() => {
+                                setQuery(keyword);
+                                searchInput.current?.focus();
+                              }}
+                            >
+                              {keyword}
+                            </button>
+                          ))}
+                          <button
+                            aria-label="清空搜索历史"
+                            onClick={() => {
+                              setRecentSearches([]);
+                              try {
+                                localStorage.removeItem("musicdl-searches");
+                              } catch {
+                                /* Storage is optional. */
+                              }
+                            }}
+                          >
+                            <X />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {!tracks.length && !searching && !!favorites.length && (
+                    <section className="collection-shelf" aria-label="收藏速览">
+                      <div className="section-heading">
+                        <h2>从收藏开始听</h2>
+                        <button
+                          className="text-button"
+                          onClick={() => setView("favorites")}
+                        >
+                          查看全部
+                          <ArrowRight />
+                        </button>
+                      </div>
+                      <div className="collection-covers">
+                        {favorites.slice(0, 6).map((track) => (
+                          <button
+                            key={track.id}
+                            onClick={() => void play(track)}
+                          >
+                            <Cover track={track} large />
+                            <strong>{track.title}</strong>
+                            <small>{track.artist}</small>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                   <div className="sources">
                     <button
                       className={`source ${sourceFilter === "all" ? "active" : ""}`}
@@ -1109,6 +1352,15 @@ export function App() {
           )}
           {view === "player" && (
             <section className="view full-player">
+              {current?.cover && (
+                <div
+                  className="player-atmosphere"
+                  aria-hidden="true"
+                  style={{
+                    backgroundImage: `url(${JSON.stringify(current.cover)})`,
+                  }}
+                />
+              )}
               <div className="playback-top">
                 <button
                   className="text-button"
@@ -1144,6 +1396,20 @@ export function App() {
                       <span>{clock(duration)}</span>
                     </div>
                     <div className="album-actions">
+                      <Button
+                        label="切换随机播放"
+                        active={shuffle}
+                        onClick={() => setShuffle((v) => !v)}
+                      >
+                        <Shuffle />
+                      </Button>
+                      <Button
+                        label="切换列表循环"
+                        active={repeat}
+                        onClick={() => setRepeat((v) => !v)}
+                      >
+                        <Repeat />
+                      </Button>
                       <button
                         className="secondary"
                         onClick={() => chooseDownload([current])}

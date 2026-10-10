@@ -11,8 +11,14 @@ export function Cover({
 }) {
   return (
     <span className={large ? "album-art" : "cover"}>
+      <span className="record-fallback" aria-hidden="true">
+        <span>
+          <Music2 />
+        </span>
+      </span>
       {track?.cover && (
         <img
+          key={track.cover}
           src={track.cover}
           alt=""
           loading="lazy"
@@ -20,7 +26,6 @@ export function Cover({
           onError={(e) => (e.currentTarget.style.display = "none")}
         />
       )}
-      <Music2 aria-hidden="true" />
     </span>
   );
 }
