@@ -1,5 +1,6 @@
 services:
   musicdl-webui:
+    container_name: musicdl
     image: ghcr.io/agonie0v0/musicdl:latest
     restart: unless-stopped
     init: true

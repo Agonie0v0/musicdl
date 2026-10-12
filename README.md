@@ -39,6 +39,7 @@
 ```yaml
 services:
   musicdl-webui:
+    container_name: musicdl
     image: ghcr.io/agonie0v0/musicdl:latest
     restart: unless-stopped
     init: true
@@ -53,6 +54,8 @@ services:
       # 将 192.168.1.100 改为运行本服务的电脑或服务器 IP
       MUSICDL_TRUSTED_HOSTS: 'localhost,127.0.0.1,192.168.1.100'
 ```
+
+`container_name: musicdl` 将容器名称固定为 `musicdl`。已有部署添加这一行后，执行 `docker compose up -d`（或在 NAS 中重新部署 Compose 项目）即可应用，无需重新构建镜像。同一台主机部署多个实例时，请为每个实例填写不同的容器名称。
 
 启动前修改两处：
 
