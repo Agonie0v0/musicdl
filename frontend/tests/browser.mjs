@@ -163,6 +163,10 @@ try {
     playlist = [],
     jobs = [],
     savedPlaylists = [];
+  let libraryFiles = [
+    { path: "fixture-a.wav", name: "测试音乐.wav", size: 1024 },
+    { path: "fixture-b.lrc", name: "测试歌词.lrc", size: 128 },
+  ];
   const wav = Buffer.alloc(44 + 8000 * 2 * 8);
   wav.write("RIFF");
   wav.writeUInt32LE(wav.length - 8, 4);
@@ -261,6 +265,9 @@ try {
         ];
       }
       result = jobs;
+    } else if (p === "/downloads/job-1" && method === "DELETE") {
+      jobs = [];
+      result = { removed: true };
     } else if (p.startsWith("/downloads/job-1/")) {
       jobs[0].status = p.endsWith("/pause")
         ? "paused"
@@ -301,8 +308,13 @@ try {
     else if (p.startsWith("/stream/")) {
       await route.fulfill({ status: 200, contentType: "audio/wav", body: wav });
       return;
-    } else if (p === "/files") result = [];
-    else if (p.startsWith("/search/jobs/")) result = { cancelled: true };
+    } else if (p === "/files") {
+      if (method === "DELETE") {
+        const path = new URL(request.url()).searchParams.get("path");
+        libraryFiles = libraryFiles.filter((file) => file.path !== path);
+        result = { deleted: true };
+      } else result = libraryFiles;
+    } else if (p.startsWith("/search/jobs/")) result = { cancelled: true };
     else throw new Error(`Unhandled test API ${p}`);
     await route.fulfill({
       status: 200,
@@ -473,6 +485,63 @@ try {
   assert.equal(jobs[0].status, "paused");
   await page.getByRole("button", { name: "继续下载", exact: true }).click();
   assert.equal(jobs[0].status, "downloading");
+  await page.getByLabel("全选下载任务").check();
+  await page.getByRole("button", { name: "暂停选中", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "继续选中", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "继续选中", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "暂停选中", exact: true }),
+  ).toBeEnabled();
+  assert.equal(jobs[0].status, "downloading");
+  await page.getByLabel("全选下载任务").check();
+  await page.getByRole("button", { name: "取消选中", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "清理已结束记录", exact: true }),
+  ).toBeEnabled();
+  await page.screenshot({ path: "../output/test-ui-queue-management.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
+  await page.screenshot({
+    path: "../output/test-ui-queue-management-mobile.png",
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page
+    .getByRole("button", { name: "清理已结束记录", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText("音乐文件会保留");
+  await page.getByRole("button", { name: "确认操作", exact: true }).click();
+  await expect(page.locator(".download-row")).toHaveCount(0);
+  await page.getByRole("button", { name: "音乐文件", exact: true }).click();
+  await expect(page.locator(".file-list > div")).toHaveCount(2);
+  await page.getByLabel("搜索音乐文件").fill("音乐");
+  await expect(page.locator(".file-list > div")).toHaveCount(1);
+  await page.getByLabel("全选音乐文件").check();
+  await page.screenshot({ path: "../output/test-ui-file-management.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
+  await page.screenshot({
+    path: "../output/test-ui-file-management-mobile.png",
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "删除选中文件", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("永久删除 1 个文件");
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  assert.equal(libraryFiles.length, 2);
+  await page.getByRole("button", { name: "删除选中文件", exact: true }).click();
+  await page.getByRole("button", { name: "确认操作", exact: true }).click();
+  await expect(page.locator(".file-list > div")).toHaveCount(0);
+  await page.getByLabel("搜索音乐文件").fill("");
+  await expect(page.locator(".file-list > div")).toHaveCount(1);
   await page.getByRole("button", { name: "搜索音乐", exact: true }).click();
   if (await page.getByLabel("关闭提示", { exact: true }).count())
     await page.getByLabel("关闭提示", { exact: true }).click();
@@ -540,6 +609,18 @@ try {
   await page.getByRole("button", { name: "音源与设置", exact: true }).click();
   await page.locator(".source-setting").first().waitFor();
   assert.equal(await page.locator(".source-setting").count(), 6);
+  await expect(page.locator(".settings-advanced")).not.toHaveAttribute("open");
+  await page.getByRole("button", { name: "取消全选", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "保存设置", exact: true }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "全选", exact: true }).click();
+  assert.equal(
+    await page.locator(".source-setting input[type=checkbox]:checked").count(),
+    6,
+  );
+  await page.getByLabel("启用 GDStudio", { exact: true }).uncheck();
+  await page.locator(".settings-advanced > summary").click();
   assert.ok(await page.getByText("GDStudio", { exact: true }).isVisible());
   await page.getByLabel("每页大小", { exact: true }).fill("25");
   await page.getByLabel("最大重试次数", { exact: true }).fill("5");
@@ -603,6 +684,7 @@ try {
   assert.deepEqual(engineConfig.requests_overrides.MiguMusicClient.headers, {
     "X-Custom": "keep",
   });
+  await page.locator(".settings-advanced > summary").click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => scrollTo(0, 0));
   for (const width of [768, 1200, 1440, 1920, 2560]) {

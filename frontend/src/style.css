@@ -1545,6 +1545,62 @@ tr.current {
   margin-bottom: 20px;
   font-size: 13px;
 }
+.management-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  font-size: 12px;
+}
+.management-toolbar .check-label {
+  margin: 0;
+}
+.management-help {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.management-search {
+  width: min(100%, 280px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+.job-selection {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.file-list > div > input {
+  flex: none;
+}
+.file-list a {
+  flex: none;
+}
+.settings-advanced > summary {
+  cursor: pointer;
+}
+.settings-advanced > summary h2 {
+  display: inline;
+  margin: 0;
+}
+.settings-advanced > summary > span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 16px;
+}
+.settings-advanced[open] > summary {
+  margin-bottom: 20px;
+}
+.source-picker-actions {
+  flex-wrap: wrap;
+}
+.source-setting summary .check-label {
+  padding: 8px;
+}
 .download-row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) 90px 80px auto;

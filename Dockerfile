@@ -19,7 +19,7 @@ COPY app.py engine_api.py engine_worker.py resumable_download.py docker-entrypoi
 COPY legacy/app.py ./legacy/app.py
 COPY --from=frontend /build/frontend/dist /app/frontend/dist
 COPY LICENSE-musicsquare LICENSE-musicdl-reference /licenses/
-ENV MUSICDL_BIND=0.0.0.0 MUSICDL_HOST=0.0.0.0 MUSICDL_PORT=8765 MUSICDL_DOWNLOAD_DIR=/music MUSICDL_DATA_DIR=/data MUSICDL_CONFIG=/data/config.json MUSICDL_COOKIE_SECURE=0
+ENV HOME=/data/home MUSICDL_BIND=0.0.0.0 MUSICDL_HOST=0.0.0.0 MUSICDL_PORT=8765 MUSICDL_DOWNLOAD_DIR=/music MUSICDL_DATA_DIR=/data MUSICDL_CONFIG=/data/config.json MUSICDL_COOKIE_SECURE=0
 EXPOSE 8765
 VOLUME ["/music", "/data"]
 ENTRYPOINT ["python", "/app/docker-entrypoint.py"]

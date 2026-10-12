@@ -128,6 +128,16 @@ export function App() {
   const [savedPlaylists, setSavedPlaylists] = useState<PlaylistSummary[]>([]),
     [activePlaylist, setActivePlaylist] = useState<SavedPlaylist | null>(null),
     [importName, setImportName] = useState("");
+  const [selectedJobs, setSelectedJobs] = useState<string[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [fileQuery, setFileQuery] = useState("");
+  const [managing, setManaging] = useState(false);
+  const [managementError, setManagementError] = useState("");
+  const [confirmation, setConfirmation] = useState<{
+    title: string;
+    description: string;
+    run: () => Promise<void>;
+  } | null>(null);
   const [current, setCurrent] = useState<Track | null>(null),
     [playing, setPlaying] = useState(false),
     [loadingPlay, setLoadingPlay] = useState(false),
@@ -623,6 +633,81 @@ export function App() {
     paused: "已暂停",
     cancelled: "已取消",
   };
+  const chosenJobs = jobs.filter((job) => selectedJobs.includes(job.id));
+  const visibleFiles = files.filter((file) =>
+    file.name.toLowerCase().includes(fileQuery.trim().toLowerCase()),
+  );
+  const chosenFiles = visibleFiles.filter((file) =>
+    selectedFiles.includes(file.path),
+  );
+  const stopped = (job: DownloadJob) =>
+    ["complete", "failed", "paused", "cancelled"].includes(job.status);
+  async function manageJobs(action: string, targets: DownloadJob[]) {
+    setManaging(true);
+    setManagementError("");
+    try {
+      for (const job of targets) {
+        await api(
+          action === "remove"
+            ? `/downloads/${job.id}`
+            : `/downloads/${job.id}/${action === "resume" && job.status === "cancelled" ? "retry" : action}`,
+          action === "remove" ? "DELETE" : "POST",
+        );
+        if (action === "remove")
+          setSelectedJobs((previous) => previous.filter((id) => id !== job.id));
+      }
+      setNotice(
+        action === "remove"
+          ? "下载记录已移除，已下载文件保留"
+          : "下载任务已更新",
+      );
+      setConfirmation(null);
+    } catch (error) {
+      setManagementError((error as Error).message);
+      setConfirmation(null);
+    } finally {
+      await api<DownloadJob[]>("/downloads").then(setJobs).catch(fail);
+      setManaging(false);
+    }
+  }
+  function confirmRemoval(targets: DownloadJob[]) {
+    setManagementError("");
+    setConfirmation({
+      title: "移除下载记录",
+      description: `移除 ${targets.length} 条记录及未完成的临时文件。已下载的音乐文件会保留。`,
+      run: () => manageJobs("remove", targets),
+    });
+  }
+  function confirmFileDeletion(targets: LibraryFile[]) {
+    setManagementError("");
+    setConfirmation({
+      title: "删除音乐文件",
+      description: `将从音乐库所在磁盘永久删除 ${targets.length} 个文件，无法撤销。${targets
+        .slice(0, 3)
+        .map((file) => file.name)
+        .join("、")}${targets.length > 3 ? "…" : ""}`,
+      run: async () => {
+        setManaging(true);
+        try {
+          for (const file of targets) {
+            await api(`/files?path=${encodeURIComponent(file.path)}`, "DELETE");
+            setSelectedFiles((previous) =>
+              previous.filter((path) => path !== file.path),
+            );
+          }
+          setConfirmation(null);
+          setNotice("音乐文件已删除");
+        } catch (error) {
+          setManagementError((error as Error).message);
+          setConfirmation(null);
+        } finally {
+          await api<LibraryFile[]>("/files").then(setFiles).catch(fail);
+          await api<DownloadJob[]>("/downloads").then(setJobs).catch(fail);
+          setManaging(false);
+        }
+      },
+    });
+  }
   const playbackLabel =
     current?.playback.state === "ready"
       ? `${current.playback.preview_only ? "片段试听 · " : ""}${current.playback.codec?.toUpperCase()}${current.playback.bitrate ? ` ${current.playback.bitrate} kbps` : ""}`
@@ -1599,9 +1684,134 @@ export function App() {
                   刷新进度
                 </button>
               </div>
+              {!!jobs.length && (
+                <div className="management-toolbar">
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      aria-label="全选下载任务"
+                      checked={
+                        jobs.length > 0 && chosenJobs.length === jobs.length
+                      }
+                      disabled={managing}
+                      onChange={(e) =>
+                        setSelectedJobs(
+                          e.target.checked ? jobs.map((job) => job.id) : [],
+                        )
+                      }
+                    />
+                    全选
+                  </label>
+                  <span>已选 {chosenJobs.length} 项</span>
+                  <button
+                    className="secondary"
+                    disabled={
+                      managing || !chosenJobs.some((job) => !stopped(job))
+                    }
+                    onClick={() =>
+                      void manageJobs(
+                        "pause",
+                        chosenJobs.filter((job) => !stopped(job)),
+                      )
+                    }
+                  >
+                    暂停选中
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={
+                      managing ||
+                      !chosenJobs.some((job) =>
+                        ["paused", "failed", "cancelled"].includes(job.status),
+                      )
+                    }
+                    onClick={() =>
+                      void manageJobs(
+                        "resume",
+                        chosenJobs.filter((job) =>
+                          ["paused", "failed", "cancelled"].includes(
+                            job.status,
+                          ),
+                        ),
+                      )
+                    }
+                  >
+                    继续选中
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={
+                      managing ||
+                      !chosenJobs.some(
+                        (job) =>
+                          !["complete", "cancelled"].includes(job.status),
+                      )
+                    }
+                    onClick={() =>
+                      void manageJobs(
+                        "cancel",
+                        chosenJobs.filter(
+                          (job) =>
+                            !["complete", "cancelled"].includes(job.status),
+                        ),
+                      )
+                    }
+                  >
+                    取消选中
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={
+                      managing ||
+                      !chosenJobs.length ||
+                      !chosenJobs.every(stopped)
+                    }
+                    onClick={() => confirmRemoval(chosenJobs)}
+                  >
+                    移除选中记录
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={
+                      managing ||
+                      !jobs.some((job) =>
+                        ["complete", "cancelled"].includes(job.status),
+                      )
+                    }
+                    onClick={() =>
+                      confirmRemoval(
+                        jobs.filter((job) =>
+                          ["complete", "cancelled"].includes(job.status),
+                        ),
+                      )
+                    }
+                  >
+                    清理已结束记录
+                  </button>
+                </div>
+              )}
+              <p className="management-help">
+                先暂停或取消进行中的任务，再移除记录。移除记录会保留已下载的文件。
+              </p>
+              {managementError && <p role="alert">{managementError}</p>}
               {jobs.map((job) => (
                 <div className="download-row" key={job.id}>
-                  <Cover track={job.track} />
+                  <label className="job-selection">
+                    <input
+                      type="checkbox"
+                      aria-label={`选择下载任务 ${job.track.title}`}
+                      checked={selectedJobs.includes(job.id)}
+                      disabled={managing}
+                      onChange={(e) =>
+                        setSelectedJobs(
+                          e.target.checked
+                            ? [...selectedJobs, job.id]
+                            : selectedJobs.filter((id) => id !== job.id),
+                        )
+                      }
+                    />
+                    <Cover track={job.track} />
+                  </label>
                   <div>
                     <strong>{job.track.title}</strong>
                     <small>
@@ -1629,7 +1839,7 @@ export function App() {
                         href={`/api/files/content?path=${encodeURIComponent(job.file)}`}
                         download
                       >
-                        保存文件
+                        下载到本机
                       </a>
                     )}
                   </div>
@@ -1643,6 +1853,7 @@ export function App() {
                     {["failed", "paused", "cancelled"].includes(job.status) ? (
                       <button
                         className="secondary"
+                        disabled={managing}
                         onClick={() =>
                           void api<DownloadJob>(
                             `/downloads/${job.id}/${job.status === "cancelled" ? "retry" : "resume"}`,
@@ -1665,6 +1876,7 @@ export function App() {
                         <>
                           <Button
                             label="暂停下载"
+                            disabled={managing}
                             onClick={() =>
                               void api(`/downloads/${job.id}/pause`, "POST")
                                 .then(() => api<DownloadJob[]>("/downloads"))
@@ -1676,6 +1888,7 @@ export function App() {
                           </Button>
                           <Button
                             label="取消下载"
+                            disabled={managing}
                             onClick={() =>
                               void api(`/downloads/${job.id}/cancel`, "POST")
                                 .then(() => api<DownloadJob[]>("/downloads"))
@@ -1687,6 +1900,15 @@ export function App() {
                           </Button>
                         </>
                       )
+                    )}
+                    {stopped(job) && (
+                      <Button
+                        label={`移除下载记录 ${job.track.title}`}
+                        disabled={managing}
+                        onClick={() => confirmRemoval([job])}
+                      >
+                        <Trash2 />
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -1802,13 +2024,76 @@ export function App() {
                   刷新音乐库
                 </button>
               </div>
+              <p className="management-help">
+                文件已保存在音乐库目录。“下载到本机”会通过浏览器再下载一份，适用于服务器或
+                Docker 部署。
+              </p>
+              <div className="management-toolbar">
+                <input
+                  className="management-search"
+                  aria-label="搜索音乐文件"
+                  placeholder="搜索文件名"
+                  value={fileQuery}
+                  onChange={(e) => setFileQuery(e.target.value)}
+                />
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    aria-label="全选音乐文件"
+                    disabled={managing || !visibleFiles.length}
+                    checked={
+                      visibleFiles.length > 0 &&
+                      chosenFiles.length === visibleFiles.length
+                    }
+                    onChange={(e) =>
+                      setSelectedFiles(
+                        e.target.checked
+                          ? visibleFiles.map((file) => file.path)
+                          : [],
+                      )
+                    }
+                  />
+                  全选当前结果
+                </label>
+                <span>已选 {chosenFiles.length} 项</span>
+                <button
+                  className="secondary"
+                  disabled={managing || !chosenFiles.length}
+                  onClick={() => confirmFileDeletion(chosenFiles)}
+                >
+                  删除选中文件
+                </button>
+              </div>
               <div className="file-list">
-                {files.map((file) => (
+                {visibleFiles.map((file) => (
                   <div key={file.path}>
-                    <Folder />
+                    <input
+                      type="checkbox"
+                      aria-label={`选择文件 ${file.name}`}
+                      checked={selectedFiles.includes(file.path)}
+                      disabled={managing}
+                      onChange={(e) =>
+                        setSelectedFiles(
+                          e.target.checked
+                            ? [...selectedFiles, file.path]
+                            : selectedFiles.filter(
+                                (path) => path !== file.path,
+                              ),
+                        )
+                      }
+                    />
                     <span>
                       <strong>{file.name}</strong>
-                      <small>{file.path}</small>
+                      <small>
+                        {(() => {
+                          try {
+                            const token = JSON.parse(file.path);
+                            return Array.isArray(token) ? token[1] : file.path;
+                          } catch {
+                            return file.path;
+                          }
+                        })()}
+                      </small>
                     </span>
                     <span>{bytes(file.size)}</span>
                     <a
@@ -1816,14 +2101,27 @@ export function App() {
                       download
                       href={`/api/files/content?path=${encodeURIComponent(file.path)}`}
                     >
-                      保存文件
+                      下载到本机
                     </a>
+                    <Button
+                      label={`删除文件 ${file.name}`}
+                      disabled={managing}
+                      onClick={() => confirmFileDeletion([file])}
+                    >
+                      <Trash2 />
+                    </Button>
                   </div>
                 ))}
               </div>
+              {managementError && <p role="alert">{managementError}</p>}
               {!files.length && (
                 <div className="empty">
                   音乐库为空。完成下载后，文件会显示在这里。
+                </div>
+              )}
+              {!!files.length && !visibleFiles.length && (
+                <div className="empty">
+                  没有匹配的音乐文件，请尝试其他文件名。
                 </div>
               )}
             </section>
@@ -1942,6 +2240,31 @@ export function App() {
             <X />
           </button>
         </div>
+      )}
+      {confirmation && (
+        <Modal
+          title={confirmation.title}
+          close={managing ? undefined : () => setConfirmation(null)}
+        >
+          <p>{confirmation.description}</p>
+          {managementError && <p role="alert">{managementError}</p>}
+          <div className="management-toolbar">
+            <button
+              className="secondary"
+              disabled={managing}
+              onClick={() => setConfirmation(null)}
+            >
+              取消
+            </button>
+            <button
+              className="primary"
+              disabled={managing}
+              onClick={() => void confirmation.run()}
+            >
+              {managing ? "正在处理…" : "确认操作"}
+            </button>
+          </div>
+        </Modal>
       )}
       {qualityTracks && (
         <Modal

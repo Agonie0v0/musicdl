@@ -85,6 +85,60 @@ def test_empty_import_is_not_false_success(monkeypatch):
     assert client.get('/api/playlists').json() == before
 
 
+def test_download_record_management_preserves_audio_and_rejects_active_tasks():
+    import sqlite3
+    client = TestClient(app.app)
+    audio = app.original.FILE_ROOT / 'management-test.wav'
+    audio.parent.mkdir(parents=True, exist_ok=True)
+    audio.write_bytes(b'keep-completed-audio')
+    staging = app.original.FILE_ROOT / '.partial' / 'management-paused'
+    staging.mkdir(parents=True, exist_ok=True)
+    (staging / 'partial.wav').write_bytes(b'partial')
+    records = [
+        {'id': 'management-complete', 'status': 'complete', 'track': {'title': 'completed'}},
+        {'id': 'management-paused', 'status': 'paused', 'track': {'title': 'paused'}},
+        {'id': 'management-active', 'status': 'queued', 'track': {'title': 'active'}},
+    ]
+    with sqlite3.connect(_root / 'data/musicdl.db') as db:
+        for record in records:
+            db.execute('INSERT INTO records(kind,id,body) VALUES (?,?,?)', ('download', record['id'], json.dumps(record)))
+    assert client.delete('/api/downloads/management-active', headers=HEADERS).status_code == 409
+    assert client.delete('/api/downloads/management-complete', headers=HEADERS).status_code == 200
+    assert audio.read_bytes() == b'keep-completed-audio'
+    assert client.delete('/api/downloads/management-paused', headers=HEADERS).status_code == 200
+    assert not staging.exists()
+    assert client.delete('/api/downloads/management-paused', headers=HEADERS).status_code == 404
+    with sqlite3.connect(_root / 'data/musicdl.db') as db:
+        db.execute("DELETE FROM records WHERE kind='download' AND id='management-active'")
+    audio.unlink()
+
+
+def test_library_deletion_checks_paths_and_clears_download_link():
+    import sqlite3
+    client = TestClient(app.app)
+    base = app.original.FILE_ROOT
+    base.mkdir(parents=True, exist_ok=True)
+    audio = base / 'delete-fixture.wav'
+    lyrics = base / 'delete-fixture.lrc'
+    audio.write_bytes(b'audio')
+    lyrics.write_text('lyrics', encoding='utf-8')
+    token = json.dumps([str(base), audio.name], ensure_ascii=False)
+    job = {'id': 'management-file', 'status': 'complete', 'track': {'title': 'fixture'}, 'file': token}
+    with sqlite3.connect(_root / 'data/musicdl.db') as db:
+        db.execute('INSERT INTO records(kind,id,body) VALUES (?,?,?)', ('download', job['id'], json.dumps(job)))
+    outside = base.parent / 'must-keep.txt'
+    outside.write_text('keep', encoding='utf-8')
+    assert client.delete('/api/files', params={'path': json.dumps([str(base), '../must-keep.txt'])}, headers=HEADERS).status_code == 403
+    assert client.delete('/api/files', params={'path': json.dumps([str(base.parent), outside.name])}, headers=HEADERS).status_code == 403
+    assert client.delete('/api/files', params={'path': json.dumps([str(base), '.partial/job/audio.wav'])}, headers=HEADERS).status_code == 403
+    assert client.delete('/api/files', params={'path': token}, headers=HEADERS).status_code == 200
+    assert not audio.exists() and lyrics.exists() and outside.exists()
+    assert next(j for j in client.get('/api/downloads').json() if j['id'] == job['id'])['file'] is None
+    assert client.get('/api/files/content', params={'path': token}).status_code == 404
+    assert client.delete('/api/downloads/management-file', headers=HEADERS).status_code == 200
+    lyrics.unlink()
+
+
 def test_fully_unresolved_import_retains_missing_song_report(monkeypatch):
     future = Future()
     future.set_result({'songs': [], 'issues': [{'title': '不可用', 'source_id': '42', 'artist': '', 'reason': '资源不可用'}]})

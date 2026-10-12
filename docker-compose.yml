@@ -11,5 +11,8 @@ services:
     environment:
       MUSICDL_USER: admin
       MUSICDL_PASS: '请改成你自己的密码'
+      # NAS 有专用目录用户时，取消注释并填写其 UID/GID（在 NAS 上执行 id 用户名）
+      # PUID: '1000'
+      # PGID: '1000'
       # 将 192.168.1.100 改为运行本服务的电脑或服务器 IP
       MUSICDL_TRUSTED_HOSTS: 'localhost,127.0.0.1,192.168.1.100'

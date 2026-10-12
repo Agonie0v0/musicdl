@@ -104,6 +104,7 @@ export function EngineSettings({
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const globalKeys = [
     "work_dir",
     "search_size_per_source",
@@ -230,6 +231,7 @@ export function EngineSettings({
           await saved();
           setMessage("全部设置已保存并生效");
         } catch (e) {
+          setAdvancedOpen(true);
           setError((e as Error).message);
         } finally {
           setBusy(false);
@@ -434,7 +436,14 @@ export function EngineSettings({
               })
             }
           >
-            启用全部音源
+            全选
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => setConfig({ ...config, music_sources: [] })}
+          >
+            取消全选
           </button>
           <span>{config.music_sources.length} 个音源参与搜索</span>
         </div>
@@ -454,6 +463,7 @@ export function EngineSettings({
                   >
                     <input
                       type="checkbox"
+                      aria-label={`启用 ${source.label}`}
                       checked={config.music_sources.includes(name)}
                       onChange={(e) =>
                         setConfig({
@@ -464,7 +474,6 @@ export function EngineSettings({
                         })
                       }
                     />
-                    参与搜索
                   </label>
                 </summary>
                 <label>
@@ -526,8 +535,15 @@ export function EngineSettings({
           })}
         </div>
       </section>
-      <section className="settings-section settings-advanced">
-        <h2>分源高级配置</h2>
+      <details
+        className="settings-section settings-advanced"
+        open={advancedOpen}
+        onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+      >
+        <summary>
+          <h2>分源高级配置</h2>
+          <span>可选 · 通常无需修改</span>
+        </summary>
         <p>
           键使用完整音源名称，例如
           NeteaseMusicClient。已有参数会原样读取、保存；修改普通设置不会清空这些配置。
@@ -559,7 +575,7 @@ export function EngineSettings({
             />
           </label>
         </div>
-      </section>
+      </details>
       <div className="settings-save">
         <button
           className="primary"
@@ -570,6 +586,9 @@ export function EngineSettings({
         </button>
         {error && <p role="alert">{error}</p>}
         {message && <p role="status">{message}</p>}
+        {!config.music_sources.length && (
+          <p role="status">请选择至少一个音源后保存。</p>
+        )}
       </div>
     </form>
   );

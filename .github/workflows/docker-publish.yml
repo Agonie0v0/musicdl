@@ -60,20 +60,33 @@ jobs:
 
       - name: 验证已发布镜像可启动
         run: |
-          sudo mkdir -p /tmp/musicdl-smoke/data/engine /tmp/musicdl-smoke/music
-          sudo chmod 755 /tmp/musicdl-smoke/data /tmp/musicdl-smoke/data/engine /tmp/musicdl-smoke/music
-          docker run -d --name musicdl-smoke -p 127.0.0.1:18765:8765 \
-            -v /tmp/musicdl-smoke/data:/data -v /tmp/musicdl-smoke/music:/music \
-            -e MUSICDL_USER=smoke -e MUSICDL_PASS=smoke-test-password \
-            ghcr.io/agonie0v0/musicdl:sha-${GITHUB_SHA}
-          for attempt in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:18765/api/health | grep -q '"backend":"original-musicdl"'; then
-              docker exec musicdl-smoke python -c "from pathlib import Path; s=Path('/proc/1/status').read_text(); assert 'Uid:\t10001\t10001\t10001\t10001' in s; assert Path('/data/musicdl.db').exists()"
-              docker exec --user 10001:10001 musicdl-smoke python -c "from pathlib import Path; Path('/music/write-check').write_text('ok')"
-              docker logs musicdl-smoke --tail 30
-              exit 0
+          for identity in 10001:10001 1026:100; do
+            runtime_uid=${identity%:*}
+            runtime_gid=${identity#*:}
+            storage=/tmp/musicdl-smoke/${runtime_uid}
+            sudo mkdir -p "$storage/data/engine" "$storage/music"
+            # Reproduce root-owned, non-writable NAS directories and old state.
+            sudo touch "$storage/data/engine/old-state"
+            sudo chmod 400 "$storage/data/engine/old-state"
+            sudo chmod 500 "$storage/data" "$storage/data/engine" "$storage/music"
+            identity_args=()
+            if [ "$runtime_uid" != 10001 ]; then
+              identity_args=(-e PUID="$runtime_uid" -e PGID="$runtime_gid")
             fi
-            sleep 2
+            docker run -d --name musicdl-smoke -p 127.0.0.1:18765:8765 \
+              -v "$storage/data:/data" -v "$storage/music:/music" \
+              -e MUSICDL_USER=smoke -e MUSICDL_PASS=smoke-test-password \
+              "${identity_args[@]}" ghcr.io/agonie0v0/musicdl:sha-${GITHUB_SHA}
+            ready=0
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent http://127.0.0.1:18765/api/health | grep -q '"backend":"original-musicdl"'; then
+                ready=1
+                break
+              fi
+              sleep 2
+            done
+            docker logs musicdl-smoke --tail 30
+            [ "$ready" = 1 ] || exit 1
+            docker exec --user "$identity" musicdl-smoke python -c "import os; from pathlib import Path; s=Path('/proc/1/status').read_text(); assert 'Uid:\t' + '\t'.join(['$runtime_uid'] * 4) in s; assert Path('/data/musicdl.db').exists(); Path('/data/engine/old-state').write_text('repaired'); Path('/music/write-check').write_text('ok'); (Path.home() / '.cache').mkdir(parents=True, exist_ok=True); assert os.stat('/data/engine').st_mode & 0o777 == 0o700"
+            docker rm -f musicdl-smoke
           done
-          docker logs musicdl-smoke
-          exit 1

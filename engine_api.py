@@ -742,6 +742,21 @@ def install(old, root):
             put('download', ident, job)
         return job
 
+    @router.delete('/api/downloads/{ident}')
+    def remove_download(ident: str):
+        with runner_lock:
+            job = get('download', ident)
+            if not job:
+                raise HTTPException(404, '任务不存在')
+            if ident in runners or job['status'] not in {'complete', 'failed', 'paused', 'cancelled'}:
+                raise HTTPException(409, '请先取消或暂停下载，等待任务停止后再移除记录')
+            staging = old.FILE_ROOT / '.partial' / ident
+            if staging.exists() and staging.resolve().is_relative_to(old.FILE_ROOT.resolve()) and not staging.is_symlink():
+                shutil.rmtree(staging)
+            remove('download', ident)
+            old.pushlog('info', f'已移除下载记录：{job["track"]["title"]}（保留已完成的音乐文件）', category='download', task_id=ident)
+        return {'removed': True}
+
     @router.get('/api/files')
     def files():
         result = []
@@ -751,15 +766,38 @@ def install(old, root):
             result.append({'path': json.dumps([value['dir'], value['rel']], ensure_ascii=False), 'name': value['name'], 'size': value['size']})
         return result
 
-    @router.get('/api/files/content')
-    def file_content(path: str):
+    def resolve_library_file(path):
         try:
             base, relative = json.loads(path)
+            if not isinstance(base, str) or not isinstance(relative, str):
+                raise ValueError('Invalid file token')
         except (ValueError, TypeError):
             # Paths saved by the earlier Rust build remain readable under its root.
             base, relative = str(old.FILE_ROOT), path
-        target = old.resolvefile(base, relative)
+        if '.partial' in Path(relative).parts:
+            raise HTTPException(403, '不能操作下载中的临时文件')
+        return old.resolvefile(base, relative)
+
+    @router.get('/api/files/content')
+    def file_content(path: str):
+        target = resolve_library_file(path)
         return FileResponse(target, filename=target.name)
+
+    @router.delete('/api/files')
+    def delete_library_file(path: str):
+        target = resolve_library_file(path)
+        try:
+            target.unlink()
+        except OSError:
+            raise HTTPException(409, '文件正在使用或无法删除，请关闭占用程序后重试')
+        # Keep history, but stop offering a link to a deleted file.
+        with runner_lock:
+            for job in values('download'):
+                if job.get('file') == file_token(target):
+                    job.update(file=None, detail='音乐文件已从音乐库删除')
+                    put('download', job['id'], job)
+        old.pushlog('info', f'已删除音乐文件：{target.name}', category='download')
+        return {'deleted': True}
 
     @old.app.on_event('shutdown')
     async def shutdown():
