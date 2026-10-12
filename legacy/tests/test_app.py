@@ -17,6 +17,37 @@ from legacy import app
 WRITE_HEADERS = {'X-MusicDL-Request': '1'}
 
 
+def test_audio_disconnect_logs_original_error_and_byte_count(monkeypatch):
+    import asyncio
+    from unittest.mock import Mock
+    from starlette.requests import Request
+    song = SimpleNamespace(source='KugouMusicClient', ext='flac', song_name='断流测试', downloaded_contents=None,
+                           protocol='HTTP', download_url='https://example.org/audio',
+                           default_download_headers={}, default_download_cookies={})
+    upstream = Mock(status_code=200, headers={'Content-Type': 'audio/flac'})
+    def chunks(**kwargs):
+        yield b'fLaC'
+        raise ConnectionError('HTTP 503 https://audio.example/song?signature=private-link')
+    upstream.iter_content = chunks
+    provider = SimpleNamespace(default_download_headers={}, default_download_cookies={})
+    monkeypatch.setattr(app, 'getsong', lambda sid: song)
+    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={song.source: provider}, requests_overrides={}))
+    monkeypatch.setattr(app, 'validatepublicurl', lambda url, label: url)
+    monkeypatch.setattr(app, 'preview_request', lambda *args: upstream)
+    request = Request({'type': 'http', 'headers': []})
+    response = app.stream('disconnect-test', request)
+    async def consume():
+        async for chunk in response.body_iterator:
+            pass
+    with pytest.raises(ConnectionError):
+        asyncio.run(consume())
+    entry = next(entry for entry in reversed(app.LOGS) if '试听音频传输中断' in entry['message'])
+    assert entry['task_id'] == 'disconnect-test' and entry['level'] == 'error'
+    assert 'HTTP 503' in entry['message'] and '已传输 4 bytes' in entry['message']
+    assert 'private-link' not in entry['message']
+    upstream.close.assert_called_once()
+
+
 @pytest.mark.parametrize('encoded,partial', [(False, False), (True, False), (True, True)])
 def test_audio_stream_normalizes_mime_and_compressed_range(monkeypatch, encoded, partial):
     from unittest.mock import Mock

@@ -5,7 +5,7 @@ import copy
 import hashlib
 import struct
 import time
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from bot_notifications import DownloadLinks, WecomCrypt, install
+from bot_notifications import BotService
 
 
 class Store:
@@ -316,3 +317,92 @@ def test_fail_closed_config_and_utf8_message_limit(setup_bot, monkeypatch):
     monkeypatch.setenv('MUSICDL_PUBLIC_URL', 'http://music.example.com')
     with pytest.raises(ValueError, match='PUBLIC_URL'):
         type(bot)(store.get, store.put, store.values, store.remove, bot.search, bot.enqueue, bot.control, bot.links.resolve, bot.log)
+
+
+def test_web_config_masks_secrets_preserves_blank_and_reloads_after_restart(setup_bot, monkeypatch):
+    app, bot, store, audio, track = setup_bot
+    link = urlsplit(bot.links.create(completed_job(audio, track)))
+    monkeypatch.setattr(BotService, 'start', AsyncMock())
+    monkeypatch.setattr(BotService, 'stop', AsyncMock())
+    client = TestClient(app)
+    config = client.get('/api/bots/config')
+    assert 'test-token' not in config.text and 'tg_token' not in config.json()
+    assert config.json()['configured']['tg_token'] is True
+    assert type(config.json()['link_ttl_seconds']) is int
+    changed = client.put('/api/bots/config', json={'tg_token': '', 'tg_allowed_users': '789'})
+    assert changed.status_code == 200
+    assert app.state.bots is not bot
+    assert app.state.bots.tg_token == 'test-token'
+    assert app.state.bots.tg_users == {'789'}
+    current = app.state.bots
+    failed = client.put('/api/bots/config', json={'tg_allowed_users': 'username'})
+    assert failed.status_code == 400
+    assert app.state.bots is current and current.tg_users == {'789'}
+    disabled = client.put('/api/bots/config', json={'tg_enabled': False})
+    assert disabled.status_code == 200 and disabled.json()['status']['tg'] is False
+    assert client.get(link.path + '?' + link.query).status_code == 200
+    assert store.get('bot_setting', 'config')['tg_token'] == 'test-token'
+    restored = BotService(store.get, store.put, store.values, store.remove, bot.search,
+                          bot.enqueue, bot.control, bot.links.resolve, bot.log)
+    assert not restored.enabled and restored.config['tg_token'] == 'test-token'
+    cleared = client.put('/api/bots/config', json={'clear_secrets': ['tg_token']})
+    assert cleared.status_code == 200
+    assert cleared.json()['configured']['tg_token'] is False
+    assert client.put('/api/bots/config', json={'tg_enabled': True}).status_code == 400
+
+
+def test_web_connection_tests_do_not_send_messages_and_redact_failures(setup_bot, monkeypatch):
+    app, bot, _, _, _ = setup_bot
+    client = TestClient(app)
+    telegram = Mock(return_value={'username': 'testbot'})
+    monkeypatch.setattr(bot, 'telegram', telegram)
+    assert client.post('/api/bots/test', json={'channel': 'tg'}).status_code == 200
+    telegram.assert_called_once_with('getMe', {})
+    telegram.side_effect = RuntimeError('HTTP 401 test-token https://api.telegram.org/bottest-token/getMe')
+    result = client.post('/api/bots/test', json={'channel': 'tg'})
+    assert result.status_code == 502 and '401' in result.text
+    assert 'test-token' not in result.text and 'https://' not in result.text
+    assert 'test-token' not in str(bot.log.call_args)
+    assert client.post('/api/bots/test', json={'channel': 'wecom'}).status_code == 400
+
+
+def test_web_wecom_config_replaces_callback_credentials_without_restart(setup_bot, monkeypatch):
+    app, bot, _, _, _ = setup_bot
+    monkeypatch.setattr(BotService, 'start', AsyncMock())
+    monkeypatch.setattr(BotService, 'stop', AsyncMock())
+    client = TestClient(app)
+    draft = {'wecom_enabled': True, 'wecom_corp_id': 'corp123', 'wecom_agent_id': '100001',
+             'wecom_secret': 'private-secret', 'wecom_allowed_users': 'alice',
+             'wecom_token': 'verify-token', 'wecom_aes_key': 'bad-key'}
+    assert client.put('/api/bots/config', json=draft).status_code == 400
+    assert app.state.bots is bot
+    draft['wecom_aes_key'] = base64.b64encode(b'k' * 32).decode().rstrip('=')
+    result = client.put('/api/bots/config', json=draft)
+    assert result.status_code == 200 and result.json()['status']['wecom'] is True
+    assert 'private-secret' not in result.text and draft['wecom_aes_key'] not in result.text
+    encrypted, query = encrypt_callback(app.state.bots, b'hello')
+    assert client.get('/bot/wecom', params={**query, 'echostr': encrypted}).text == 'hello'
+
+
+def test_stop_waits_for_old_telegram_long_poll_before_reconfiguration(setup_bot):
+    import threading
+    _, bot, _, _, _ = setup_bot
+    entered, release = threading.Event(), threading.Event()
+    def telegram(method, body, timeout=15):
+        assert method == 'getUpdates'
+        entered.set()
+        release.wait(5)
+        return []
+    bot.telegram = telegram
+    async def check():
+        await bot.start()
+        assert await asyncio.to_thread(entered.wait, 2)
+        stopping = asyncio.create_task(bot.stop())
+        await asyncio.sleep(.05)
+        assert not stopping.done()
+        release.set()
+        await asyncio.wait_for(stopping, 2)
+    try:
+        asyncio.run(check())
+    finally:
+        release.set()

@@ -205,6 +205,22 @@ try {
   wav.writeUInt16LE(16, 34);
   wav.write("data", 36);
   wav.writeUInt32LE(wav.length - 44, 40);
+  const playbackReports = [];
+  let brokenAudio = false;
+  let botConfig = {
+    public_url: "",
+    link_ttl_seconds: 86400,
+    bot_sources: "",
+    tg_enabled: false,
+    wecom_enabled: false,
+    tg_allowed_users: "",
+    wecom_corp_id: "",
+    wecom_agent_id: "",
+    wecom_allowed_users: "",
+    configured: {},
+    status: { tg: false, wecom: false },
+    callback_url: "",
+  };
   const searchRequests = [],
     cancelledSearches = [],
     searchKeywords = new Map(),
@@ -215,7 +231,44 @@ try {
       method = request.method();
     let result;
     if (p === "/auth/status") result = { authenticated: true, required: false };
-    else if (p === "/logs") {
+    else if (p === "/bots/config") {
+      if (method === "PUT") {
+        const { clear_secrets, ...draft } = request.postDataJSON();
+        const secretKeys = [
+          "tg_token",
+          "tg_proxy",
+          "wecom_secret",
+          "wecom_token",
+          "wecom_aes_key",
+        ];
+        for (const key of secretKeys) {
+          if (draft[key]) botConfig.configured[key] = true;
+          if (clear_secrets.includes(key)) botConfig.configured[key] = false;
+          delete draft[key];
+        }
+        botConfig = {
+          ...botConfig,
+          ...draft,
+          status: { tg: draft.tg_enabled, wecom: draft.wecom_enabled },
+          callback_url: draft.public_url + "/bot/wecom",
+        };
+      }
+      result = botConfig;
+    } else if (p === "/bots/test")
+      result = { detail: "连接测试成功；未发送消息。" };
+    else if (p === "/playback/events") {
+      const report = request.postDataJSON();
+      playbackReports.push(report);
+      logEntries.push({
+        id: logEntries.length + 100,
+        time: "2026-10-12 12:00:00",
+        level: report.event === "failed" ? "error" : "info",
+        category: "playback",
+        task_id: report.track_id,
+        message: `测试曲目 · ${report.stage} · ${report.detail} · MediaError=${report.code}`,
+      });
+      result = { recorded: true };
+    } else if (p === "/logs") {
       logFetches++;
       result = { logs: logEntries };
     } else if (p === "/config")
@@ -352,7 +405,11 @@ try {
     else if (p.endsWith("/playback") || p.endsWith("/versions"))
       result = p.includes("local-fixture") ? localTrack : track;
     else if (p.startsWith("/stream/") || p === "/files/audio") {
-      await route.fulfill({ status: 200, contentType: "audio/wav", body: wav });
+      await route.fulfill({
+        status: 200,
+        contentType: "audio/wav",
+        body: brokenAudio ? Buffer.from("invalid audio") : wav,
+      });
       return;
     } else if (p === "/files/tags") {
       const tags = request.postDataJSON();
@@ -980,6 +1037,86 @@ try {
   await page.getByRole("button", { name: "确认删除", exact: true }).click();
   await expect(page.locator(".saved-playlist")).toHaveCount(0);
   await expect(page.locator(".library-empty")).toBeVisible();
+  await page.getByRole("button", { name: "通知与机器人", exact: true }).click();
+  await page
+    .getByLabel("公网 HTTPS 地址", { exact: true })
+    .fill("https://music.example.com");
+  await page.getByLabel("启用 Telegram", { exact: true }).check();
+  await page
+    .getByLabel("Telegram Bot Token", { exact: true })
+    .fill("fixture-bot-token");
+  await page.getByLabel("Telegram 用户白名单", { exact: true }).fill("123456");
+  await page.getByLabel("启用企业微信", { exact: true }).check();
+  await page
+    .getByLabel("企业微信 CorpID", { exact: true })
+    .fill("corp-fixture");
+  await page.getByLabel("企业微信 AgentID", { exact: true }).fill("100001");
+  await page
+    .getByLabel("企业微信 Secret", { exact: true })
+    .fill("fixture-secret");
+  await page
+    .getByLabel("企业微信回调 Token", { exact: true })
+    .fill("fixture-token");
+  await page
+    .getByLabel("企业微信 EncodingAESKey", { exact: true })
+    .fill("a".repeat(43));
+  await page.getByLabel("企业微信用户白名单", { exact: true }).fill("alice");
+  await page.getByRole("button", { name: "保存通知配置", exact: true }).click();
+  await expect(
+    page.getByText("通知渠道已保存并立即生效，无需重启服务", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Telegram Bot Token", { exact: true }),
+  ).toHaveValue("");
+  await expect(
+    page.getByLabel("企业微信回调地址", { exact: true }),
+  ).toHaveValue("https://music.example.com/bot/wecom");
+  await page
+    .getByRole("button", { name: "测试 Telegram 连接", exact: true })
+    .click();
+  await expect(
+    page.getByText("连接测试成功；未发送消息。", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "测试企业微信连接", exact: true })
+    .click();
+  await expect(
+    page.getByText("连接测试成功；未发送消息。", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: "../output/test-ui-bots.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
+  await page.screenshot({
+    path: "../output/test-ui-bots-mobile.png",
+    fullPage: true,
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "通知与机器人", exact: true }).click();
+  await expect(page.getByLabel("启用 Telegram", { exact: true })).toBeChecked();
+  await expect(
+    page.getByLabel("Telegram Bot Token", { exact: true }),
+  ).toHaveValue("");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "搜索音乐", exact: true }).click();
+  await submitSearch("错误试听");
+  brokenAudio = true;
+  await page
+    .getByRole("button", { name: "播放 测试曲目", exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      playbackReports.some(
+        (report) => report.event === "failed" && report.code === 4,
+      ),
+    )
+    .toBe(true);
+  await page.getByRole("button", { name: "运行日志", exact: true }).click();
+  await page.getByLabel("日志类别", { exact: true }).selectOption("playback");
+  await expect(page.locator(".log-lines")).toContainText("MediaError=4");
   assert.deepEqual(errors, []);
   console.log(
     "Browser integration passed: search, real audio, lyric seeking, favorites, playlist, quality selection, queue controls, settings, responsive layout.",

@@ -1874,6 +1874,15 @@ tr.current {
 .settings-form > * {
   min-width: 0;
 }
+.bot-settings .settings-grid > * {
+  min-width: 0;
+}
+.bot-settings .ready-filter {
+  white-space: normal;
+}
+.bot-settings p {
+  overflow-wrap: anywhere;
+}
 .settings-behavior,
 .settings-sources,
 .settings-advanced,

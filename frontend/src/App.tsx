@@ -1,5 +1,6 @@
 import { Cover, Button, Lyrics, Modal } from "./components";
 import { EngineSettings } from "./EngineSettings";
+import { BotSettings } from "./BotSettings";
 import { RuntimeLogs } from "./RuntimeLogs";
 import { MusicLibrary } from "./MusicLibrary";
 import { PlaylistLibrary } from "./PlaylistLibrary";
@@ -33,6 +34,7 @@ import {
   History,
   ScrollText,
   Trash2,
+  Bell,
 } from "lucide-react";
 import { api } from "./api";
 import { selectResults } from "./results";
@@ -64,6 +66,7 @@ const views = {
   files: ["音乐文件", "本地音乐库"],
   logs: ["运行日志", "实时查看搜索、下载与报错详情"],
   settings: ["音源与设置", "账号权限、代理与下载偏好"],
+  bots: ["通知与机器人", "企业微信应用、Telegram 与手机音乐下载链接"],
 } as const;
 type View = keyof typeof views;
 const bytes = (n: number) =>
@@ -168,6 +171,7 @@ export function App() {
     eventSource = useRef<EventSource | null>(null),
     startTime = useRef(0),
     currentRef = useRef<Track | null>(null),
+    bufferingRef = useRef(false),
     nextRef = useRef<() => void>(() => {});
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -187,7 +191,16 @@ export function App() {
         event.preventDefault();
         const element = audio.current;
         if (currentRef.current && element) {
-          if (element.paused) void element.play().catch(fail);
+          if (element.paused)
+            void element.play().catch((error) => {
+              reportPlayback(
+                currentRef.current!,
+                "failed",
+                "play",
+                error.message,
+              );
+              fail(error);
+            });
           else element.pause();
         }
       }
@@ -357,11 +370,35 @@ export function App() {
       }
     }
   }
+  function reportPlayback(
+    track: Track,
+    event: "started" | "failed" | "stalled" | "recovered",
+    stage: "prepare" | "format" | "play" | "media" | "buffer",
+    detail = "",
+  ) {
+    const element = audio.current;
+    void api("/playback/events", "POST", {
+      track_id: track.id,
+      event,
+      stage,
+      detail: detail.slice(0, 2000),
+      code: element?.error?.code || 0,
+      network_state: element?.networkState || 0,
+      ready_state: element?.readyState || 0,
+      position: Math.max(
+        0,
+        Number.isFinite(element?.currentTime) ? element!.currentTime : 0,
+      ),
+      browser: navigator.userAgent.slice(0, 300),
+    }).catch(() => {});
+  }
   async function play(track: Track) {
     const generation = ++playGeneration.current;
     audio.current?.pause();
     audio.current?.removeAttribute("src");
     audio.current?.load();
+    currentRef.current = track;
+    bufferingRef.current = false;
     setCurrent(track);
     setLoadingPlay(true);
     setLyricText("正在获取歌词…");
@@ -379,6 +416,7 @@ export function App() {
         if (generation === playGeneration.current)
           setLyricText(error instanceof Error ? error.message : "歌词加载失败");
       });
+    let stage: "prepare" | "format" | "play" = "prepare";
     try {
       const prepared = await api<Track>(`/tracks/${track.id}/playback`, "POST");
       if (generation !== playGeneration.current) return;
@@ -388,6 +426,7 @@ export function App() {
           prepared.playback.detail || "曲目暂不可试听，请更换音源",
         );
       const element = audio.current!;
+      stage = "format";
       const mediaType: { [key: string]: string } = {
         flac: "audio/flac",
         mp3: "audio/mpeg",
@@ -409,9 +448,20 @@ export function App() {
         );
       element.src = prepared.playback.url;
       element.load();
+      stage = "play";
       await element.play();
     } catch (error) {
-      if (generation === playGeneration.current) fail(error);
+      if (generation === playGeneration.current) {
+        reportPlayback(
+          track,
+          "failed",
+          stage,
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error),
+        );
+        fail(error);
+      }
     } finally {
       if (generation === playGeneration.current) setLoadingPlay(false);
     }
@@ -432,7 +482,15 @@ export function App() {
         await play(current);
         return;
       }
-      await audio.current.play().catch(fail);
+      await audio.current.play().catch((error) => {
+        reportPlayback(
+          current,
+          "failed",
+          "play",
+          `${error.name}: ${error.message}`,
+        );
+        fail(error);
+      });
     } else audio.current?.pause();
   }
   function step(direction: number) {
@@ -1088,11 +1146,54 @@ export function App() {
           )
         }
         onPlay={() => setPlaying(true)}
+        onPlaying={() => {
+          if (currentRef.current)
+            reportPlayback(
+              currentRef.current,
+              bufferingRef.current ? "recovered" : "started",
+              bufferingRef.current ? "buffer" : "play",
+            );
+          bufferingRef.current = false;
+        }}
+        onStalled={() => {
+          if (
+            currentRef.current &&
+            audio.current?.getAttribute("src") &&
+            !bufferingRef.current
+          ) {
+            bufferingRef.current = true;
+            reportPlayback(
+              currentRef.current,
+              "stalled",
+              "buffer",
+              "浏览器未能继续获取音频，等待网络恢复",
+            );
+          }
+        }}
         onPause={() => setPlaying(false)}
         onEnded={() => nextRef.current()}
         onError={() => {
+          if (!audio.current?.getAttribute("src") || !currentRef.current)
+            return;
+          const code = audio.current.error?.code || 0;
+          const reason =
+            (
+              {
+                1: "播放请求被中止",
+                2: "音频网络请求失败或传输中断",
+                3: "音频解码失败，内容损坏或编码不支持",
+                4: "音频地址不可用或浏览器不支持该格式",
+              } as Record<number, string>
+            )[code] || "未知媒体错误";
+          reportPlayback(
+            currentRef.current,
+            "failed",
+            "media",
+            `${reason}；${audio.current.error?.message || "浏览器未提供更多信息"}`,
+          );
           setLoadingPlay(false);
-          setNotice("播放资源不可用或格式不支持，请重新试听或更换音源");
+          setPlaying(false);
+          setNotice(`${reason}，请查看运行日志或重新试听`);
         }}
       />
       <div className="app">
@@ -1158,6 +1259,13 @@ export function App() {
             })}
           </nav>
           <div className="sidebar-bottom">
+            <button
+              className={`nav-item ${view === "bots" ? "active" : ""}`}
+              onClick={() => setView("bots")}
+            >
+              <Bell />
+              <span>通知与机器人</span>
+            </button>
             {current && (
               <button
                 className="sidebar-record"
@@ -2104,6 +2212,11 @@ export function App() {
             </section>
           )}
           {view === "logs" && <RuntimeLogs active={!loginRequired} />}
+          {view === "bots" && (
+            <section className="view">
+              <BotSettings />
+            </section>
+          )}
           <footer className="player">
             <button
               className="mini-track"

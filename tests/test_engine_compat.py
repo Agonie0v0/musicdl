@@ -540,6 +540,29 @@ def test_cancel_before_start_does_not_exhaust_job_limit():
     asyncio.run(check())
 
 
+def test_browser_playback_errors_are_correlated_redacted_and_deduplicated(monkeypatch):
+    client = TestClient(app.app)
+    song = fixture_song()
+    song.identifier = 'browser-error-fixture'
+    track = app.app.state.engine_test['remember'](song)
+    report = {'track_id': track['id'], 'event': 'failed', 'stage': 'media', 'code': 4,
+              'network_state': 3, 'ready_state': 0, 'position': 1.5, 'browser': 'Test Chromium',
+              'detail': '音频格式不支持 HTTP 403 https://audio.example/song?signature=private-url\nCookie: private-cookie'}
+    assert client.post('/api/playback/events', json=report).status_code == 403
+    assert client.post('/api/playback/events', headers=HEADERS, json=report).json()['recorded'] is True
+    assert client.post('/api/playback/events', headers=HEADERS, json=report).json()['recorded'] is False
+    entries = [entry for entry in client.get('/api/logs').json()['logs'] if entry['task_id'] == track['id']]
+    assert len(entries) == 1
+    assert entries[0]['level'] == 'error' and entries[0]['category'] == 'playback'
+    assert song.song_name in entries[0]['message'] and 'MediaError=4' in entries[0]['message']
+    assert 'HTTP 403' in entries[0]['message'] and 'Test Chromium' in entries[0]['message']
+    assert 'private-url' not in entries[0]['message'] and 'private-cookie' not in entries[0]['message']
+    monkeypatch.setattr(app.original, 'AUTH_ENABLED', True)
+    assert client.get('/api/bots/config').status_code == 401
+    assert client.put('/api/bots/config', headers=HEADERS, json={'tg_enabled': False}).status_code == 401
+    assert client.post('/api/playback/events', headers=HEADERS, json=report).status_code == 401
+
+
 def test_cancel_blocked_workers_releases_slots_and_retry_is_fresh(monkeypatch, tmp_path):
     original_popen = engine_api.subprocess.Popen
     processes = []

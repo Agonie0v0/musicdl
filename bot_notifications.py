@@ -23,6 +23,11 @@ HELP = ('命令：\n搜索 歌名 歌手（/search）\n下载 搜索编号 序�
         '链接 任务编号（/link）\n帮助（/help）\n仅支持私聊；下载完成后发送原文件链接。')
 ALIASES = {'搜索': 'search', '下载': 'download', '状态': 'status', '取消': 'cancel',
            '继续': 'resume', '链接': 'link', '帮助': 'help', 'start': 'help'}
+CONFIG_DEFAULTS = {'public_url': '', 'link_ttl_seconds': 86400, 'bot_sources': '',
+                   'tg_token': '', 'tg_allowed_users': '', 'tg_proxy': '',
+                   'wecom_corp_id': '', 'wecom_agent_id': '', 'wecom_secret': '',
+                   'wecom_token': '', 'wecom_aes_key': '', 'wecom_allowed_users': ''}
+SECRET_FIELDS = {'tg_token', 'tg_proxy', 'wecom_secret', 'wecom_token', 'wecom_aes_key'}
 
 
 def xml_fields(raw):
@@ -105,54 +110,73 @@ class DownloadLinks:
 
 
 class BotService:
-    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log):
+    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None):
         self.get, self.put, self.values, self.remove = get, put, values, remove
         self.search, self.enqueue, self.control, self.log = search, enqueue, control, log
-        self.tg_token = os.environ.get('MUSICDL_TG_TOKEN', '').strip()
-        self.tg_users = self.env_set('MUSICDL_TG_ALLOWED_USERS')
-        self.corp = os.environ.get('MUSICDL_WECOM_CORP_ID', '').strip()
-        self.agent = os.environ.get('MUSICDL_WECOM_AGENT_ID', '').strip()
-        self.secret = os.environ.get('MUSICDL_WECOM_SECRET', '').strip()
-        self.wecom_users = self.env_set('MUSICDL_WECOM_ALLOWED_USERS')
+        self.config = {key: os.environ.get('MUSICDL_' + key.upper(), default) for key, default in CONFIG_DEFAULTS.items()}
+        self.config.update(get('bot_setting', 'config', {}) if config is None else config)
+        cfg = self.config
+        cfg.setdefault('tg_enabled', bool(cfg['tg_token']))
+        cfg.setdefault('wecom_enabled', bool(cfg['wecom_corp_id'] or cfg['wecom_agent_id'] or cfg['wecom_secret']))
+        self.tg_token = cfg['tg_token'].strip() if cfg['tg_enabled'] else ''
+        self.tg_users = {x.strip() for x in cfg['tg_allowed_users'].split(',') if x.strip()}
+        self.corp = cfg['wecom_corp_id'].strip() if cfg['wecom_enabled'] else ''
+        self.agent = cfg['wecom_agent_id'].strip() if cfg['wecom_enabled'] else ''
+        self.secret = cfg['wecom_secret'].strip() if cfg['wecom_enabled'] else ''
+        self.wecom_users = {x.strip() for x in cfg['wecom_allowed_users'].split(',') if x.strip()}
         self.crypt = None
-        self.enabled = bool(self.tg_token or self.corp or self.agent or self.secret)
-        base = os.environ.get('MUSICDL_PUBLIC_URL', '').strip().rstrip('/')
-        if self.enabled:
+        self.enabled = bool(cfg['tg_enabled'] or cfg['wecom_enabled'])
+        base = cfg['public_url'].strip().rstrip('/')
+        if self.enabled or base:
             url = urlsplit(base)
             if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment or url.path:
                 raise ValueError('机器人需要 MUSICDL_PUBLIC_URL=https://域名（不含路径、凭据或查询参数）')
-            if self.tg_token and not self.tg_users:
+            if cfg['tg_enabled'] and (not self.tg_token or not self.tg_users):
                 raise ValueError('请配置 MUSICDL_TG_ALLOWED_USERS（Telegram 数字用户 ID）')
             if self.tg_token and any(not re.fullmatch(r'[1-9][0-9]*', u) for u in self.tg_users):
                 raise ValueError('MUSICDL_TG_ALLOWED_USERS 必须是数字用户 ID')
-            if self.corp or self.agent or self.secret:
+            if cfg['wecom_enabled']:
                 if not self.corp or not self.agent.isdigit() or not self.secret or not self.wecom_users:
                     raise ValueError('企业微信需要 CorpID、AgentID、Secret 和用户白名单')
-                token = os.environ.get('MUSICDL_WECOM_TOKEN', '').strip()
+                token = cfg['wecom_token'].strip()
                 if not token:
                     raise ValueError('请配置 MUSICDL_WECOM_TOKEN')
-                self.crypt = WecomCrypt(token, os.environ.get('MUSICDL_WECOM_AES_KEY', '').strip(), self.corp)
-        ttl = int(os.environ.get('MUSICDL_LINK_TTL_SECONDS', '86400'))
+                self.crypt = WecomCrypt(token, cfg['wecom_aes_key'].strip(), self.corp)
+        ttl = int(cfg['link_ttl_seconds'])
         if not 60 <= ttl <= 604800:
             raise ValueError('下载链接有效期须为 60–604800 秒')
-        self.links = DownloadLinks(get, put, resolve, base, ttl) if self.enabled else None
-        self.sources = list(filter(None, (s.strip() for s in os.environ.get('MUSICDL_BOT_SOURCES', '').split(','))))
+        cfg['link_ttl_seconds'] = ttl
+        # Disabling command intake must not invalidate already issued links.
+        self.links = DownloadLinks(get, put, resolve, base, ttl) if base else None
+        self.sources = list(filter(None, (s.strip() for s in cfg['bot_sources'].split(','))))
         self.tg_http, self.wecom_http = requests.Session(), requests.Session()
-        proxy = os.environ.get('MUSICDL_TG_PROXY', '').strip()
+        proxy = cfg['tg_proxy'].strip()
         if proxy:
+            if urlsplit(proxy).scheme not in {'http', 'https'} or not urlsplit(proxy).hostname:
+                raise ValueError('Telegram 代理必须为 HTTP / HTTPS 地址')
             self.tg_http.trust_env = False
             self.tg_http.proxies = {'http': proxy, 'https': proxy}
         self.access_token, self.token_until = '', 0
         self.tasks = []
+        self.tg_poll = None
         self.pending = asyncio.Queue(maxsize=100)
         self.seen_rate = {}
 
-    @staticmethod
-    def env_set(name):
-        return {x.strip() for x in os.environ.get(name, '').split(',') if x.strip()}
-
     def allowed(self, channel, user):
-        return user in (self.tg_users if channel == 'tg' else self.wecom_users)
+        return bool(self.tg_token if channel == 'tg' else self.crypt) and user in (self.tg_users if channel == 'tg' else self.wecom_users)
+
+    def public_config(self):
+        return {**{key: value for key, value in self.config.items() if key not in SECRET_FIELDS},
+                'configured': {key: bool(self.config[key]) for key in SECRET_FIELDS},
+                'status': {'tg': bool(self.tg_token), 'wecom': bool(self.crypt)},
+                'callback_url': self.config['public_url'].rstrip('/') + '/bot/wecom' if self.config['public_url'] else ''}
+
+    def error_detail(self, error):
+        detail = f'{type(error).__name__}: {error}'
+        for key in SECRET_FIELDS:
+            if self.config[key]:
+                detail = detail.replace(self.config[key], '[已隐藏]')
+        return re.sub(r'https?://[^\s<>\'\"]+', '[地址已隐藏]', detail)[:2000]
 
     def reply(self, message, text, url=None, buttons=None, job_id=None):
         # WeCom text messages have a byte limit; split without cutting UTF-8.
@@ -192,6 +216,8 @@ class BotService:
         text = message['text'].strip()
         command, _, arg = text.partition(' ')
         command = ALIASES.get(command.lstrip('/').split('@')[0].lower(), command.lstrip('/').lower())
+        command_label = command if command in {'help', 'search', 'download', 'status', 'link', 'cancel', 'resume'} else '未知命令'
+        self.log('info', f'{message["channel"]} 开始处理命令：{command_label}', category='bot', task_id=message['id'])
         owner = f'{message["channel"]}:{message["user"]}'
         if command == 'help':
             self.reply(message, HELP)
@@ -267,9 +293,10 @@ class BotService:
                 # Keep the durable inbox pending so shutdown never loses a command.
                 raise
             except HTTPException as error:
+                self.log('warning', f'{message["channel"]} 命令被拒绝：HTTP {error.status_code} · {error.detail}', category='bot', task_id=message['id'])
                 self.reply(message, str(error.detail))
             except Exception as error:
-                self.log('error', f'机器人命令失败：{type(error).__name__}', category='bot')
+                self.log('error', f'{message["channel"]} 机器人命令失败：{self.error_detail(error)}', category='bot', task_id=message['id'])
                 self.reply(message, '命令执行失败，请查看服务运行日志后重试。')
             message['done'] = True
             self.put('bot_inbox', message['id'], message)
@@ -279,15 +306,16 @@ class BotService:
         response = self.tg_http.post(f'https://api.telegram.org/bot{self.tg_token}/{method}', json=body, timeout=timeout)
         data = response.json()
         if not data.get('ok'):
-            raise RuntimeError(f'Telegram API error {data.get("error_code")}')
+            raise RuntimeError(f'Telegram API error {data.get("error_code")}: {data.get("description", "请求失败")}')
         return data['result']
 
     async def poll_telegram(self):
         while True:
             try:
                 offset = self.get('bot_setting', 'tg_offset', 0)
-                updates = await asyncio.to_thread(self.telegram, 'getUpdates',
-                    {'offset': offset, 'timeout': 20, 'allowed_updates': ['message', 'callback_query']}, 30)
+                self.tg_poll = asyncio.create_task(asyncio.to_thread(self.telegram, 'getUpdates',
+                    {'offset': offset, 'timeout': 20, 'allowed_updates': ['message', 'callback_query']}, 30))
+                updates = await asyncio.shield(self.tg_poll)
                 for update in updates:
                     callback = update.get('callback_query')
                     message = (callback or {}).get('message') if callback else update.get('message')
@@ -305,8 +333,20 @@ class BotService:
                         except Exception:
                             pass
             except Exception as error:
-                self.log('warning', f'Telegram 接收失败，将重试：{type(error).__name__}（检查代理、Token 和 webhook 是否关闭）', category='bot')
+                self.log('warning', f'Telegram 接收失败，将重试：{self.error_detail(error)}（检查代理、Token 和 webhook 是否关闭）', category='bot')
                 await asyncio.sleep(5)
+
+    def wecom_access(self):
+        if time.time() >= self.token_until:
+            response = self.wecom_http.get('https://qyapi.weixin.qq.com/cgi-bin/gettoken',
+                params={'corpid': self.corp, 'corpsecret': self.secret}, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            if data.get('errcode', 0) or not data.get('access_token'):
+                raise RuntimeError(f'WeCom token error {data.get("errcode")}: {data.get("errmsg", "请求失败")}')
+            self.access_token = data['access_token']
+            self.token_until = time.time() + max(1, int(data['expires_in']) - 120)
+        return self.access_token
 
     def send(self, item):
         if item['channel'] == 'tg':
@@ -317,15 +357,7 @@ class BotService:
                 body['reply_markup'] = {'inline_keyboard': item['buttons']}
             self.telegram('sendMessage', body)
             return
-        if time.time() >= self.token_until:
-            response = self.wecom_http.get('https://qyapi.weixin.qq.com/cgi-bin/gettoken',
-                params={'corpid': self.corp, 'corpsecret': self.secret}, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            if data.get('errcode', 0) or not data.get('access_token'):
-                raise RuntimeError(f'WeCom token error {data.get("errcode")}')
-            self.access_token = data['access_token']
-            self.token_until = time.time() + max(1, int(data['expires_in']) - 120)
+        self.wecom_access()
         body = {'touser': item['user'], 'agentid': int(self.agent), 'enable_duplicate_check': 1, 'duplicate_check_interval': 1800}
         if item.get('url'):
             body.update(msgtype='news', news={'articles': [{'title': '下载到手机', 'description': item['text'], 'url': item['url']}]})
@@ -338,7 +370,7 @@ class BotService:
         if data.get('errcode', 0) or data.get('invaliduser'):
             if data.get('errcode') in {40014, 42001}:
                 self.token_until = 0
-            raise RuntimeError(f'WeCom send error {data.get("errcode")}')
+            raise RuntimeError(f'WeCom send error {data.get("errcode")}: {data.get("errmsg", "请求失败")}')
 
     async def deliveries(self):
         while True:
@@ -361,6 +393,8 @@ class BotService:
                     task['notified'] = job['status']
                     self.put('bot_task', task['id'], task)
                 for item in sorted(self.values('bot_outbox'), key=lambda x: x['created']):
+                    if not (self.tg_token if item['channel'] == 'tg' else self.crypt):
+                        continue
                     if item['next'] > time.time():
                         continue
                     if not self.allowed(item['channel'], item['user']):
@@ -375,12 +409,14 @@ class BotService:
                     try:
                         await asyncio.to_thread(self.send, item)
                         self.remove('bot_outbox', item['id'])
+                        self.log('info', f'{item["channel"]} 通知发送成功', category='bot', task_id=item.get('job_id') or item['id'])
                         await asyncio.sleep(1)
                     except Exception as error:
                         item['attempts'] += 1
                         item['next'] = int(time.time()) + min(3600, 5 * 2 ** min(item['attempts'], 10))
                         self.put('bot_outbox', item['id'], item)
-                        self.log('warning', f'机器人通知失败，稍后重试：{type(error).__name__}', category='bot')
+                        retry_at = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(item['next']))
+                        self.log('warning', f'{item["channel"]} 通知发送失败，第 {item["attempts"]} 次，将于 {retry_at} 重试：{self.error_detail(error)}', category='bot', task_id=item.get('job_id') or item['id'])
                 # Keep replay protection for seven days; prune expired link/search records.
                 now = time.time()
                 for kind in ('bot_link', 'bot_search', 'bot_inbox'):
@@ -389,7 +425,7 @@ class BotService:
                         if expired:
                             self.remove(kind, record['id'])
             except Exception as error:
-                self.log('error', f'机器人通知处理失败：{type(error).__name__}', category='bot')
+                self.log('error', f'机器人通知处理失败：{self.error_detail(error)}', category='bot')
             await asyncio.sleep(3)
 
     async def start(self):
@@ -407,6 +443,10 @@ class BotService:
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        # A cancelled to_thread await does not stop the HTTP request. Wait for
+        # the old long poll before starting another one with the same token.
+        if self.tg_poll:
+            await asyncio.gather(self.tg_poll, return_exceptions=True)
         self.tg_http.close()
         self.wecom_http.close()
 
@@ -414,6 +454,72 @@ class BotService:
 def install(app, **services):
     bot = BotService(**services)
     router = APIRouter()
+    config_lock = asyncio.Lock()
+
+    @router.get('/api/bots/config')
+    def read_config():
+        return bot.public_config()
+
+    @router.put('/api/bots/config')
+    async def write_config(body: dict):
+        nonlocal bot
+        async with config_lock:
+            cfg = dict(bot.config)
+            clear = body.get('clear_secrets', [])
+            if not isinstance(clear, list) or any(key not in SECRET_FIELDS for key in clear):
+                raise HTTPException(400, '清除密钥字段无效')
+            for key, value in body.items():
+                if key == 'clear_secrets':
+                    continue
+                if key not in cfg:
+                    raise HTTPException(400, '不支持的机器人配置字段')
+                if key in {'tg_enabled', 'wecom_enabled'}:
+                    if not isinstance(value, bool):
+                        raise HTTPException(400, '启用状态必须为布尔值')
+                elif key == 'link_ttl_seconds':
+                    if type(value) is not int:
+                        raise HTTPException(400, '链接有效期必须为整数秒')
+                elif not isinstance(value, str) or len(value) > 4096:
+                    raise HTTPException(400, '配置字段必须为不超过 4096 字符的文本')
+                if key not in SECRET_FIELDS or value:
+                    cfg[key] = value.strip() if isinstance(value, str) else value
+            for key in clear:
+                cfg[key] = ''
+            try:
+                candidate = BotService(**services, config=cfg)
+            except (ValueError, TypeError) as error:
+                bot.log('warning', f'通知渠道配置验证失败：{bot.error_detail(error)}', category='bot')
+                raise HTTPException(400, '通知渠道配置无效：' + bot.error_detail(error))
+            # Validate completely before replacing a working service.
+            services['put']('bot_setting', 'config', cfg)
+            await bot.stop()
+            previous = bot
+            bot = candidate
+            app.state.bots = bot
+            if cfg['tg_token'] != previous.config['tg_token']:
+                services['put']('bot_setting', 'tg_offset', 0)
+            await bot.start()
+            bot.log('info', f'通知渠道配置已保存并生效：Telegram={bool(bot.tg_token)}，企业微信={bool(bot.crypt)}', category='bot')
+            return bot.public_config()
+
+    @router.post('/api/bots/test')
+    async def test_connection(body: dict):
+        async with config_lock:
+            channel = body.get('channel')
+            if channel == 'tg' and bot.tg_token:
+                check = lambda: bot.telegram('getMe', {})
+            elif channel == 'wecom' and bot.crypt:
+                check = bot.wecom_access
+            else:
+                raise HTTPException(400, '请先保存并启用对应渠道')
+            try:
+                await asyncio.to_thread(check)
+            except Exception as error:
+                detail = bot.error_detail(error)
+                bot.log('error', f'{channel} 连接测试失败：{detail}', category='bot')
+                raise HTTPException(502, f'连接测试失败：{detail}')
+            bot.log('info', f'{channel} 连接测试成功', category='bot')
+            return {'detail': '连接测试成功；凭据可用。企业微信回调和白名单成员权限请在平台单独验证。' if channel == 'wecom' else '连接测试成功；机器人凭据可用，未发送消息。'}
 
     @router.api_route('/downloads/{ident}', methods=['GET', 'HEAD'])
     def download(ident: str, expires: int, signature: str):
@@ -459,8 +565,12 @@ def install(app, **services):
         return Response('success', media_type='text/plain')
 
     app.include_router(router)
-    app.router.add_event_handler('startup', bot.start)
+    async def start():
+        await bot.start()
+    async def stop():
+        await bot.stop()
+    app.router.add_event_handler('startup', start)
     # Stop command intake before the shared engine pauses workers on shutdown.
-    app.router.on_shutdown.insert(0, bot.stop)
+    app.router.on_shutdown.insert(0, stop)
     app.state.bots = bot
     return bot

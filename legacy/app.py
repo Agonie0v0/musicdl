@@ -963,7 +963,7 @@ def stream(sid: str, request: Request):
     except Exception as err:
         if upstream is not None:
             upstream.close()
-        pushlog('error', f'在线试听拉取失败：{song.song_name} · {song.source} · {type(err).__name__} · HTTP {getattr(upstream, "status_code", "未知")}', category='playback')
+        pushlog('error', f'在线试听拉取失败：{song.song_name} · {song.source} · {type(err).__name__}: {err} · HTTP {getattr(upstream, "status_code", "未知")}', category='playback', task_id=sid)
         raise HTTPException(502, '在线试听音频请求失败，请查看播放日志或重新搜索')
     resp_headers = {'Accept-Ranges': 'none' if encoded else upstream.headers.get('Accept-Ranges', 'none')}
     for h in (() if encoded else ('Content-Length', 'Content-Range', 'ETag', 'Last-Modified')):
@@ -971,12 +971,24 @@ def stream(sid: str, request: Request):
             resp_headers[h] = upstream.headers[h]
     # Source format is authoritative: some CDNs label FLAC as octet-stream.
     media_type = mime if mime != 'application/octet-stream' else upstream.headers.get('Content-Type', mime)
+    pushlog('debug', f'音频上游响应：{song.song_name} · {song.source} · HTTP {upstream.status_code} · MIME {media_type} · '
+            f'Range {request.headers.get("range", "完整请求")[:120]} · Content-Range {upstream.headers.get("Content-Range", "无")[:120]} · '
+            f'Content-Length {upstream.headers.get("Content-Length", "未知")} · 首包 {len(first)} bytes', category='playback', task_id=sid)
     def audio_chunks():
+        sent, started = 0, time.monotonic()
         try:
+            sent += len(first)
             yield first
-            yield from chunks
+            for chunk in chunks:
+                sent += len(chunk)
+                yield chunk
+        except Exception as error:
+            pushlog('error', f'试听音频传输中断：{song.song_name} · {song.source} · 已传输 {sent} bytes · '
+                    f'{type(error).__name__}: {error}', category='playback', task_id=sid)
+            raise
         finally:
             upstream.close()
+            pushlog('debug', f'试听音频请求结束：{song.song_name} · {sent} bytes · 耗时 {time.monotonic() - started:.2f}s', category='playback', task_id=sid)
     return StreamingResponse(audio_chunks(), status_code=upstream.status_code,
                              media_type=media_type, headers=resp_headers)
 

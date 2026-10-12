@@ -19,10 +19,12 @@ from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.exception_handlers import http_exception_handler
 from pydantic import BaseModel, Field
 import engine_worker
 import local_library
@@ -45,6 +47,18 @@ def source_class(name):
 class SearchBody(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
     sources: list[str] | None = None
+
+
+class PlaybackEvent(BaseModel):
+    track_id: str = Field(min_length=1, max_length=100)
+    event: Literal['started', 'failed', 'stalled', 'recovered']
+    stage: Literal['prepare', 'format', 'play', 'media', 'buffer']
+    detail: str = Field(default='', max_length=2000)
+    code: int = Field(default=0, ge=0, le=4)
+    network_state: int = Field(default=0, ge=0, le=3)
+    ready_state: int = Field(default=0, ge=0, le=4)
+    position: float = Field(default=0, ge=0, le=10000000)
+    browser: str = Field(default='', max_length=300)
 
 
 class DownloadItem(BaseModel):
@@ -78,6 +92,8 @@ def install(old, root):
     database = data / 'musicdl.db'
     db_lock = threading.RLock()
     db = sqlite3.connect(database, check_same_thread=False)
+    if os.name != 'nt':
+        database.chmod(0o600)
     db.execute('PRAGMA journal_mode=WAL')
     db.execute('CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL,id TEXT NOT NULL,body TEXT NOT NULL,updated INTEGER NOT NULL DEFAULT (unixepoch()),PRIMARY KEY(kind,id))')
     db.commit()
@@ -206,6 +222,51 @@ def install(old, root):
         raise HTTPException(404, '未找到完全匹配的原曲目，请重新搜索选择')
 
     router = APIRouter()
+    playback_reports = OrderedDict()
+
+    @old.app.exception_handler(HTTPException)
+    async def http_error(request: Request, error: HTTPException):
+        route = getattr(request.scope.get('route'), 'path', request.url.path[:200])
+        old.pushlog('error' if error.status_code >= 500 else 'warning',
+                    f'接口拒绝：{request.method} {route} · HTTP {error.status_code} · {error.detail}', category='system')
+        return await http_exception_handler(request, error)
+
+    @old.app.middleware('http')
+    async def api_errors(request: Request, call_next):
+        started = time.monotonic()
+        try:
+            response = await call_next(request)
+        except Exception:
+            if request.url.path.startswith('/api/'):
+                route = getattr(request.scope.get('route'), 'path', request.url.path[:200])
+                old.pushlog('error', f'接口异常：{request.method} {route}\n{traceback.format_exc()}', category='system')
+            raise
+        if request.url.path.startswith('/api/') and response.status_code >= 400:
+            route = getattr(request.scope.get('route'), 'path', request.url.path[:200])
+            old.pushlog('error' if response.status_code >= 500 else 'warning',
+                        f'接口失败：{request.method} {route} · HTTP {response.status_code} · 耗时 {int((time.monotonic() - started) * 1000)} ms', category='system')
+        return response
+
+    @router.post('/api/playback/events')
+    def playback_event(body: PlaybackEvent):
+        key = (body.track_id, body.event, body.stage, body.code, body.detail)
+        now = time.monotonic()
+        with old.LOG_LOCK:
+            if now - playback_reports.get(key, -100) < 5:
+                return {'recorded': False}
+            playback_reports[key] = now
+            while len(playback_reports) > 128:
+                playback_reports.popitem(last=False)
+        record = get('track', body.track_id) or {}
+        track = record.get('track', record)
+        level = 'error' if body.event == 'failed' else 'warning' if body.event == 'stalled' else 'info'
+        event_label = {'started': '开始播放', 'failed': '播放失败', 'stalled': '缓冲停滞', 'recovered': '恢复播放'}[body.event]
+        stage_label = {'prepare': '准备曲目', 'format': '格式检查', 'play': '启动播放', 'media': '媒体解码/网络', 'buffer': '缓冲'}[body.stage]
+        old.pushlog(level, f'浏览器试听 {event_label} · 阶段 {stage_label} · {track.get("title", "未知曲目")} · '
+                    f'{track.get("source", "未知音源")} · 编码 {track.get("playback", {}).get("codec", "未知")}\n'
+                    f'{body.detail}\nMediaError={body.code}，networkState={body.network_state}，readyState={body.ready_state}，'
+                    f'播放位置={body.position:.2f}s\n浏览器：{body.browser}', category='playback', task_id=body.track_id)
+        return {'recorded': True}
     search_pool = ProcessPoolExecutor(max_workers=6, mp_context=multiprocessing.get_context('spawn'))
     download_pool = ThreadPoolExecutor(max_workers=max(1, min(4, int(os.environ.get('MUSICDL_MAX_DOWNLOAD_TASKS', '2')))))
     searches = OrderedDict()
@@ -436,12 +497,14 @@ def install(old, root):
 
     @router.post('/api/tracks/{sid}/playback')
     def playback(sid: str):
-        record = get('track', sid)
-        if record and record.get('local_path'):
-            return library_file(record['local_path'])['track']
-        result = remember(song_for(sid), sid)
-        old.pushlog('info', f'准备试听：{result["title"]} · {result["source"]} · {result["playback"]["codec"]}', category='playback')
-        return result
+        try:
+            record = get('track', sid)
+            result = library_file(record['local_path'])['track'] if record and record.get('local_path') else remember(song_for(sid), sid)
+            old.pushlog('info', f'准备试听：{result["title"]} · {result["source"]} · {result["playback"]["codec"]} · 状态 {result["playback"]["state"]}', category='playback', task_id=sid)
+            return result
+        except Exception:
+            old.pushlog('error', f'准备试听失败\n{traceback.format_exc()}', category='playback', task_id=sid)
+            raise
 
     @router.post('/api/tracks/{sid}/versions')
     def versions(sid: str):
@@ -464,8 +527,12 @@ def install(old, root):
 
     @router.get('/api/stream/{sid}')
     def stream(sid: str, request: Request):
-        song_for(sid)
-        return old.stream(sid, request)
+        try:
+            song_for(sid)
+            return old.stream(sid, request)
+        except Exception:
+            old.pushlog('error', f'试听音频请求失败\n{traceback.format_exc()}', category='playback', task_id=sid)
+            raise
 
     @router.get('/api/favorites')
     def favorites():

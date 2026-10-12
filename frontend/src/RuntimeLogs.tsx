@@ -17,6 +17,7 @@ const categories: Record<string, string> = {
   playlist: "歌单",
   playback: "播放",
   engine: "引擎",
+  bot: "通知与机器人",
 };
 const levels: Record<string, string> = {
   debug: "调试",
