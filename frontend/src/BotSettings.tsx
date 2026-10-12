@@ -194,10 +194,13 @@ export function BotSettings() {
       </section>
       <section className="settings-section settings-proxy">
         <h2>使用方式</h2>
-        <p>搜索 歌名 歌手 → 下载 搜索编号 序号 → 收到下载链接。</p>
         <p>
-          也支持
-          /search、/download、/status、/cancel、/resume、/link、/help。仅允许白名单用户私聊使用。
+          搜索歌名歌手 → 打开网页试听确认版本 → 选择编号下载 → 收到下载链接。
+        </p>
+        <p>
+          Telegram 发送 /start 或 /menu 打开功能菜单，也可直接发送歌名搜索。
+          输入框旁的菜单会自动注册；搜索结果每页 5 首，显示音质和文件大小。
+          /status 查看进度和管理任务。仅允许白名单用户私聊使用。
         </p>
         <p>
           连接测试只验证凭据，不发送消息。保存配置后再测试；下载和命令处理的错误可在“运行日志

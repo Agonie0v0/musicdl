@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from bot_notifications import DownloadLinks, WecomCrypt, install
 from bot_notifications import BotService
+from bot_notifications import format_size, track_size, job_progress, TG_COMMANDS
 
 
 class Store:
@@ -33,6 +34,23 @@ class Store:
 
     def remove(self, kind, key):
         self.records.pop((kind, key), None)
+
+
+@pytest.mark.parametrize('value, expected', [(1000, '1000 B'), (1048576, '1.0 MB'),
+    (1073741824, '1.0 GB'), (None, '大小未知'), (float('nan'), '大小未知'),
+    (float('inf'), '大小未知'), (-1, '大小未知'), (True, '大小未知')])
+def test_size_formatting(value, expected):
+    assert format_size(value) == expected
+
+
+def test_provider_size_and_transfer_progress():
+    assert track_size({'size_bytes': 2 * 1048576, 'size_label': 'unknown'}) == '2.0 MB'
+    assert track_size({'size_label': '35.2 MB'}) == '35.2 MB'
+    for value in ('NULL', 'unknown', 'None', '0 MB', '0 B', 'bad\nsize'):
+        assert track_size({'size_label': value}) == '大小未知'
+    job = {'track': {}, 'status': 'downloading', 'bytes': 1048576, 'total_bytes': 4194304}
+    assert job_progress(job) == '1.0 MB / 4.0 MB · 25.0%'
+    assert job_progress({**job, 'total_bytes': None}) == '已下载 1.0 MB · 总大小未知'
 
 
 @pytest.fixture
@@ -72,6 +90,104 @@ def setup_bot(monkeypatch, tmp_path):
 
 def completed_job(audio, track):
     return {'id': 'a' * 32, 'status': 'complete', 'file': audio.name, 'track': track}
+
+
+def test_search_cards_pagination_and_download_indices(setup_bot):
+    _, bot, store, _, track = setup_bot
+    tracks = [{**track, 'id': f'track{i}', 'title': f'歌曲{i}\n' + '长标题' * 30,
+               'size_bytes': 1048576 * (i + 1)} for i in range(10)]
+    bot.search = AsyncMock(return_value=(tracks, True))
+
+    async def scenario():
+        message = {'id': 'a' * 64, 'channel': 'tg', 'user': '123', 'text': '稻香 周杰伦'}
+        await bot.command(message)
+        bot.search.assert_awaited_once_with('稻香 周杰伦', bot.sources)
+        first = store.values('bot_outbox')[-1]
+        assert '第 1/2 页' in first['text'] and '共 10 首' in first['text']
+        assert '1.0 MB' in first['text'] and '5.0 MB' in first['text']
+        assert '6.0 MB' not in first['text'] and '部分音源' in first['text']
+        assert '歌曲0 长标题' in first['text'] and '…' in first['text']
+        assert [len(row) for row in first['buttons'][:2]] == [3, 2]
+        assert all(len(b['callback_data'].encode()) <= 64 for row in first['buttons'] for b in row if 'callback_data' in b)
+        await bot.command({**message, 'text': '/results aaaaaaaa 2', 'reply_message_id': 42})
+        second = store.values('bot_outbox')[-1]
+        assert '第 2/2 页' in second['text'] and '6.0 MB' in second['text']
+        assert second['edit_message_id'] == 42
+        assert second['buttons'][0][0]['callback_data'] == '/download aaaaaaaa 6'
+        bot.telegram = Mock()
+        bot.send(second)
+        assert bot.telegram.call_args.args[0] == 'editMessageText'
+        assert bot.telegram.call_args.args[1]['message_id'] == 42
+        for user, page in [('456', 2), ('123', 3)]:
+            with pytest.raises(HTTPException):
+                await bot.command({**message, 'user': user, 'text': f'/results aaaaaaaa {page}'})
+        await bot.command({**message, 'id': 'b' * 64, 'text': '/download aaaaaaaa 6'})
+        assert bot.enqueue.call_args.args[0]['id'] == 'track5'
+        assert '6.0 MB' in store.values('bot_outbox')[-1]['text']
+        result = store.get('bot_search', 'tg:123:aaaaaaaa')
+        result['expires'] = 0
+        store.put('bot_search', result['id'], result)
+        with pytest.raises(HTTPException):
+            await bot.command({**message, 'text': '/results aaaaaaaa 1'})
+
+    asyncio.run(scenario())
+
+
+def test_menu_commands_and_task_progress(setup_bot):
+    _, bot, store, audio, track = setup_bot
+
+    async def scenario():
+        message = {'id': 'b' * 64, 'channel': 'tg', 'user': '123', 'text': ''}
+        for command in ('/start', '/menu', '菜单', '/help', '/search'):
+            await bot.command({**message, 'text': command})
+            item = store.values('bot_outbox')[-1]
+            assert item['buttons'][0][1]['callback_data'] == '/status'
+            assert '稻香 周杰伦' in item['text']
+        job = {**completed_job(audio, track), 'status': 'downloading', 'bytes': 1048576, 'total_bytes': 4194304}
+        store.put('download', job['id'], job)
+        store.put('bot_task', job['id'], {'id': job['id'], 'owner': 'tg:123'})
+        await bot.command({**message, 'text': '/status'})
+        item = store.values('bot_outbox')[-1]
+        assert '25.0%' in item['text'] and job['id'] not in item['text']
+        assert item['buttons'][0][0]['callback_data'] == '/cancel ' + job['id']
+        store.put('download', job['id'], {**job, 'status': 'complete'})
+        await bot.command({**message, 'text': '/status'})
+        item = store.values('bot_outbox')[-1]
+        assert '文件大小：1000 B' in item['text']  # actual file beats stale transfer metadata
+        assert item['buttons'][0][0]['callback_data'] == '/link ' + job['id']
+        bot.telegram = Mock(return_value=True)
+        await bot.register_telegram_menu()
+        assert [call.args[0] for call in bot.telegram.call_args_list] == ['setMyCommands', 'setMyCommands', 'setChatMenuButton']
+        assert bot.telegram.call_args_list[0].args[1]['commands'] == TG_COMMANDS
+        assert bot.telegram.call_args_list[0].args[1]['scope'] == {'type': 'all_private_chats'}
+        assert bot.telegram.call_args_list[1].args[1]['language_code'] == 'zh'
+        assert bot.telegram.call_args.args[1] == {'menu_button': {'type': 'commands'}}
+
+    asyncio.run(scenario())
+
+
+def test_channel_text_limits_and_wecom_pagination(setup_bot):
+    _, bot, store, _, track = setup_bot
+    message = {'id': 'b' * 64, 'channel': 'wecom', 'user': 'member'}
+    bot.search_page(message, 'aaaaaaaa', {'tracks': [track] * 10}, 2)
+    assert '翻页：结果 aaaaaaaa 1' in store.values('bot_outbox')[-1]['text']
+    text = '中🎵' * 2000
+    for channel, limit, encoding, divisor in [('wecom', 1800, 'utf-8', 1), ('tg', 4000, 'utf-16-le', 2)]:
+        before = len(store.values('bot_outbox'))
+        bot.reply({**message, 'channel': channel}, text, edit_message_id=42)
+        chunks = store.values('bot_outbox')[before:]
+        assert ''.join(item['text'] for item in chunks) == text
+        assert all(len(item['text'].encode(encoding)) // divisor <= limit for item in chunks)
+        assert all('edit_message_id' not in item for item in chunks)
+
+
+def test_telegram_unchanged_edit_is_success(setup_bot):
+    _, bot, _, _, _ = setup_bot
+    bot.tg_http = Mock()
+    bot.tg_http.post.return_value.json.return_value = {'ok': False, 'error_code': 400, 'description': 'Bad Request: message is not modified'}
+    assert bot.telegram('editMessageText', {}) is True
+    with pytest.raises(RuntimeError):
+        bot.telegram('sendMessage', {})
 
 
 def test_signed_file_stream_range_head_and_tampering(setup_bot, monkeypatch):
@@ -217,6 +333,8 @@ def test_completion_delivery_retries_without_downloading_again(setup_bot, monkey
         bot.enqueue.assert_not_called()
         item = store.values('bot_outbox')[0]
         assert item['url'] and item['job_id'] == job['id']
+        assert '文件大小：1000 B' in item['text']
+        assert job['id'] not in item['text']
         old_url = item['url']
         # Simulate a notification outage longer than the link's lifetime.
         item['next'] = 0
@@ -277,6 +395,31 @@ def test_telegram_ignores_groups_and_persists_offset_after_inbox(setup_bot):
         await asyncio.gather(worker, return_exceptions=True)
         assert bot.pending.qsize() == 1
         assert store.get('bot_setting', 'tg_offset') == 4
+
+    asyncio.run(scenario())
+
+
+def test_telegram_pagination_callback_retains_message_id(setup_bot):
+    _, bot, store, _, _ = setup_bot
+    update = {'update_id': 8, 'callback_query': {'id': 'callback', 'from': {'id': 123},
+        'message': {'message_id': 42, 'chat': {'id': 123, 'type': 'private'}},
+        'data': '/results aaaaaaaa 2'}}
+    def telegram(method, body, timeout=15):
+        return [update] if method == 'getUpdates' else True
+    bot.telegram = Mock(side_effect=telegram)
+
+    async def scenario():
+        worker = asyncio.create_task(bot.poll_telegram())
+        for _ in range(100):
+            await asyncio.sleep(.01)
+            if store.get('bot_setting', 'tg_offset') == 9:
+                break
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        message = store.values('bot_inbox')[0]
+        assert message['reply_message_id'] == 42
+        assert message['text'] == '/results aaaaaaaa 2'
+        assert any(call.args[0] == 'answerCallbackQuery' for call in bot.telegram.call_args_list)
 
     asyncio.run(scenario())
 
@@ -389,6 +532,8 @@ def test_stop_waits_for_old_telegram_long_poll_before_reconfiguration(setup_bot)
     _, bot, _, _, _ = setup_bot
     entered, release = threading.Event(), threading.Event()
     def telegram(method, body, timeout=15):
+        if method in {'setMyCommands', 'setChatMenuButton'}:
+            return True
         assert method == 'getUpdates'
         entered.set()
         release.wait(5)

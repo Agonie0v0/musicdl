@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -18,16 +19,70 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 
-HELP = ('命令：\n搜索 歌名 歌手（/search）\n下载 搜索编号 序号（/download）\n'
-        '状态（/status）\n取消 任务编号（/cancel）\n继续 任务编号（/resume）\n'
-        '链接 任务编号（/link）\n帮助（/help）\n仅支持私聊；下载完成后发送原文件链接。')
+HELP = ('musicdl · 功能菜单\n\n'
+        '搜索音乐\n直接发送歌名或歌手，例如：稻香 周杰伦\n也可发送 /search 稻香 周杰伦\n\n'
+        '试听与下载\n先打开网页试听，确认版本后点击结果下方的下载按钮。完成后收到原文件下载链接。\n\n'
+        '我的任务\n/status 查看进度，并通过按钮继续、取消或获取下载链接。\n\n'
+        '/menu 随时打开功能菜单。仅支持白名单用户私聊。')
 ALIASES = {'搜索': 'search', '下载': 'download', '状态': 'status', '取消': 'cancel',
-           '继续': 'resume', '链接': 'link', '帮助': 'help', 'start': 'help'}
+           '继续': 'resume', '链接': 'link', '帮助': 'help', '菜单': 'help', 'menu': 'help', 'start': 'help'}
+TG_COMMANDS = [{'command': key, 'description': value} for key, value in (
+    ('start', '打开功能菜单'), ('menu', '功能菜单'), ('search', '搜索音乐：/search 歌名 歌手'),
+    ('status', '我的任务与下载进度'), ('download', '下载指定搜索结果'),
+    ('link', '获取任务下载链接'), ('cancel', '取消下载任务'), ('resume', '继续下载任务'), ('help', '使用帮助'))]
+STATUS_LABELS = {'queued': '排队中', 'resolving': '解析中', 'downloading': '下载中', 'enriching': '整理文件中',
+                 'complete': '下载完成', 'failed': '下载失败', 'paused': '已暂停', 'cancelled': '已取消'}
+SOURCE_LABELS = {'migu': '咪咕', 'netease': '网易云', 'qq': 'QQ音乐', 'kuwo': '酷我', 'qianqian': '千千',
+                 'KugouMusicClient': '酷狗', 'MiguMusicClient': '咪咕', 'NeteaseMusicClient': '网易云',
+                 'QQMusicClient': 'QQ音乐', 'KuwoMusicClient': '酷我', 'QianqianMusicClient': '千千'}
 CONFIG_DEFAULTS = {'public_url': '', 'link_ttl_seconds': 86400, 'bot_sources': '',
                    'tg_token': '', 'tg_allowed_users': '', 'tg_proxy': '',
                    'wecom_corp_id': '', 'wecom_agent_id': '', 'wecom_secret': '',
                    'wecom_token': '', 'wecom_aes_key': '', 'wecom_allowed_users': ''}
 SECRET_FIELDS = {'tg_token', 'tg_proxy', 'wecom_secret', 'wecom_token', 'wecom_aes_key'}
+
+
+def concise(value, limit=32):
+    text = re.sub(r'\s+', ' ', str(value or '')).strip()
+    return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
+def button_rows(buttons, columns=3):
+    return [buttons[index:index + columns] for index in range(0, len(buttons), columns)]
+
+
+def valid_size(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+
+def format_size(value):
+    if not valid_size(value):
+        return '大小未知'
+    for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if value < 1024 or unit == 'TB':
+            return f'{value:.0f} B' if unit == 'B' else f'{value:.1f} {unit}'
+        value /= 1024
+
+
+def track_size(track):
+    if valid_size(track.get('size_bytes')) and track['size_bytes'] > 0:
+        return format_size(track['size_bytes'])
+    label = str(track.get('size_label') or '').strip()
+    # Provider placeholders and zero estimates do not describe a real file.
+    if re.fullmatch(r'\d+(?:\.\d+)?\s*(?:[KMGT]i?B|bytes?|B)', label, re.I) and float(re.match(r'[\d.]+', label)[0]) > 0:
+        return concise(label, 24)
+    return '大小未知'
+
+
+def job_progress(job):
+    downloaded, total = job.get('bytes'), job.get('total_bytes')
+    if not valid_size(downloaded):
+        return '文件大小：' + track_size(job['track'])
+    if valid_size(total) and total > 0:
+        return f'{format_size(downloaded)} / {format_size(total)} · {min(100, downloaded / total * 100):.1f}%'
+    if job['status'] == 'complete':
+        return '文件大小：' + format_size(downloaded)
+    return f'已下载 {format_size(downloaded)} · 总大小未知'
 
 
 def xml_fields(raw):
@@ -178,12 +233,14 @@ class BotService:
                 detail = detail.replace(self.config[key], '[已隐藏]')
         return re.sub(r'https?://[^\s<>\'\"]+', '[地址已隐藏]', detail)[:2000]
 
-    def reply(self, message, text, url=None, buttons=None, job_id=None):
+    def reply(self, message, text, url=None, buttons=None, job_id=None, edit_message_id=None):
         # WeCom text messages have a byte limit; split without cutting UTF-8.
         chunks, current = [], ''
+        limit = 1800 if message['channel'] == 'wecom' else 4000
         for line in text.splitlines(keepends=True):
             for char in line:
-                if len((current + char).encode()) > 1800:
+                size = len((current + char).encode()) if message['channel'] == 'wecom' else len((current + char).encode('utf-16-le')) // 2
+                if size > limit:
                     chunks.append(current)
                     current = ''
                 current += char
@@ -191,11 +248,64 @@ class BotService:
         for index, chunk in enumerate(chunks):
             ident = secrets.token_hex(16)
             last = index == len(chunks) - 1
-            self.put('bot_outbox', ident, {'id': ident, 'channel': message['channel'], 'user': message['user'],
-                                         'text': chunk, 'url': url if last else None, 'buttons': buttons if last else None,
-                                         'job_id': job_id if last else None, 'created': time.time_ns(), 'attempts': 0, 'next': 0})
+            item = {'id': ident, 'channel': message['channel'], 'user': message['user'],
+                    'text': chunk, 'url': url if last else None, 'buttons': buttons if last else None,
+                    'job_id': job_id if last else None, 'created': time.time_ns(), 'attempts': 0, 'next': 0}
+            if edit_message_id and len(chunks) == 1:
+                item['edit_message_id'] = edit_message_id
+            self.put('bot_outbox', ident, item)
 
-    def accept(self, channel, user, message_id, text):
+    def menu_buttons(self):
+        buttons = [[{'text': '搜索音乐', 'callback_data': '/search'}, {'text': '我的任务', 'callback_data': '/status'}]]
+        if self.links:
+            buttons.append([{'text': '打开网页试听', 'url': self.links.base_url}])
+        buttons.append([{'text': '使用帮助', 'callback_data': '/help'}])
+        return buttons
+
+    def task_buttons(self, ident, status, prefix=''):
+        buttons = []
+        if status == 'complete':
+            buttons.append({'text': prefix + '获取链接', 'callback_data': f'/link {ident}'})
+        if status in {'paused', 'failed'}:
+            buttons.append({'text': prefix + '继续下载', 'callback_data': f'/resume {ident}'})
+        if status in {'queued', 'resolving', 'downloading', 'enriching', 'paused', 'failed'}:
+            buttons.append({'text': prefix + '取消任务', 'callback_data': f'/cancel {ident}'})
+        return buttons
+
+    def search_page(self, message, search_id, result, page=1):
+        tracks = result['tracks']
+        pages = (len(tracks) + 4) // 5
+        if not 1 <= page <= pages:
+            raise HTTPException(400, '搜索页码无效')
+        start = (page - 1) * 5
+        visible = tracks[start:start + 5]
+        lines = [f'搜索结果 · 第 {page}/{pages} 页 · 共 {len(tracks)} 首',
+                 f'编号 {search_id} · 30 分钟内有效', '']
+        for index, track in enumerate(visible, start + 1):
+            source = SOURCE_LABELS.get(track['source'], track['source'].removesuffix('MusicClient'))
+            lines.extend([f'{index}. {concise(track["title"])}',
+                          f'{concise(track["artist"], 24)} · {concise(source, 16)}',
+                          f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}', ''])
+        lines.append('点击下方编号下载，试听请打开网页。' if message['channel'] == 'tg' else f'下载示例：下载 {search_id} {start + 1}')
+        if message['channel'] == 'wecom' and pages > 1:
+            lines.append(f'翻页：结果 {search_id} {2 if page == 1 else 1}')
+        if result.get('partial'):
+            lines.append('部分音源失败或超时，以上为已返回结果。')
+        buttons = button_rows([{'text': f'下载 {index}', 'callback_data': f'/download {search_id} {index}'}
+                               for index in range(start + 1, start + len(visible) + 1)])
+        navigation = []
+        if page > 1:
+            navigation.append({'text': '上一页', 'callback_data': f'/results {search_id} {page - 1}'})
+        if page < pages:
+            navigation.append({'text': '下一页', 'callback_data': f'/results {search_id} {page + 1}'})
+        if navigation:
+            buttons.append(navigation)
+        if self.links:
+            buttons.append([{'text': '打开网页试听', 'url': self.links.base_url}])
+        buttons.append([{'text': '功能菜单', 'callback_data': '/menu'}, {'text': '我的任务', 'callback_data': '/status'}])
+        self.reply(message, '\n'.join(lines), buttons=buttons, edit_message_id=message.get('reply_message_id'))
+
+    def accept(self, channel, user, message_id, text, reply_message_id=None):
         if not self.allowed(channel, user):
             return False
         ident = hashlib.sha256(f'{channel}:{user}:{message_id}'.encode()).hexdigest()
@@ -208,6 +318,8 @@ class BotService:
         self.seen_rate[key] = now
         message = {'id': ident, 'channel': channel, 'user': user, 'text': text[:500],
                    'done': False, 'created': int(now)}
+        if reply_message_id:
+            message['reply_message_id'] = reply_message_id
         self.put('bot_inbox', ident, message)
         self.pending.put_nowait(message)
         return True
@@ -216,12 +328,19 @@ class BotService:
         text = message['text'].strip()
         command, _, arg = text.partition(' ')
         command = ALIASES.get(command.lstrip('/').split('@')[0].lower(), command.lstrip('/').lower())
-        command_label = command if command in {'help', 'search', 'download', 'status', 'link', 'cancel', 'resume'} else '未知命令'
+        if command == '结果':
+            command = 'results'
+        if text and not text.startswith('/') and command not in {'help', 'search', 'download', 'status', 'link', 'cancel', 'resume', 'results'}:
+            command, arg = 'search', text
+        command_label = command if command in {'help', 'search', 'download', 'status', 'link', 'cancel', 'resume', 'results'} else '未知命令'
         self.log('info', f'{message["channel"]} 开始处理命令：{command_label}', category='bot', task_id=message['id'])
         owner = f'{message["channel"]}:{message["user"]}'
         if command == 'help':
-            self.reply(message, HELP)
+            self.reply(message, HELP, buttons=self.menu_buttons())
         elif command == 'search':
+            if not arg.strip():
+                self.reply(message, '搜索音乐\n\n请直接发送歌名或歌手，例如：\n稻香 周杰伦\n\n也可使用：/search 稻香 周杰伦', buttons=self.menu_buttons())
+                return
             if not 1 <= len(arg.strip()) <= 200:
                 raise HTTPException(400, '请输入 1–200 字的搜索关键词：搜索 歌名 歌手')
             self.reply(message, '正在搜索，请稍候。')
@@ -232,15 +351,18 @@ class BotService:
                 self.reply(message, '没有可下载结果，请换关键词或检查音源设置。')
                 return
             search_id = message['id'][:8]
-            self.put('bot_search', f'{owner}:{search_id}', {'id': f'{owner}:{search_id}', 'expires': int(time.time()) + 1800, 'tracks': tracks})
-            lines = [f'搜索编号：{search_id}（30 分钟内有效）']
-            for i, track in enumerate(tracks, 1):
-                lines.append(f'{i}. {track["title"][:70]} · {track["artist"][:50]} · {track["source"]} · {track["qualities"][0]["label"]}')
-            lines.append(f'下载：下载 {search_id} 1')
-            if partial:
-                lines.append('部分音源失败或超时，以上为已获得的结果。')
-            buttons = [[{'text': f'下载 {i}', 'callback_data': f'/download {search_id} {i}'}] for i in range(1, len(tracks) + 1)]
-            self.reply(message, '\n'.join(lines), buttons=buttons)
+            result = {'id': f'{owner}:{search_id}', 'expires': int(time.time()) + 1800, 'tracks': tracks, 'partial': partial}
+            self.put('bot_search', result['id'], result)
+            # Search progress is a separate reply; only pagination edits a card.
+            self.search_page({k: v for k, v in message.items() if k != 'reply_message_id'}, search_id, result)
+        elif command == 'results':
+            args = arg.split()
+            if len(args) != 2 or not re.fullmatch(r'[a-f0-9]{8}', args[0]) or not args[1].isdigit():
+                raise HTTPException(400, '格式：结果 搜索编号 页码')
+            result = self.get('bot_search', f'{owner}:{args[0]}')
+            if not result or result['expires'] <= time.time():
+                raise HTTPException(400, '搜索结果已过期，请重新搜索')
+            self.search_page(message, args[0], result, int(args[1]))
         elif command == 'download':
             args = arg.split()
             if len(args) != 2 or not re.fullmatch(r'[a-f0-9]{8}', args[0]) or not args[1].isdigit():
@@ -258,11 +380,24 @@ class BotService:
             if not job:
                 job = await asyncio.to_thread(self.enqueue, result['tracks'][index], ident)
             self.put('bot_task', ident, {'id': ident, 'owner': owner, 'channel': message['channel'], 'user': message['user'], 'notified': None})
-            self.reply(message, f'已加入下载队列：{job["track"]["title"]}\n任务编号：{ident}')
-        elif command == 'status':
-            jobs = [(t, self.get('download', t['id'])) for t in self.values('bot_task') if t['owner'] == owner][:10]
-            lines = [f'{j["track"]["title"]} · {j["status"]}\n任务编号：{t["id"]}' for t, j in jobs if j]
-            self.reply(message, '\n'.join(lines) or '暂无任务。')
+            self.reply(message, f'已加入下载队列\n\n{concise(job["track"]["title"])}\n文件大小：{track_size(job["track"])}\n任务 {ident[:8]}\n\n完成后自动发送下载链接。', buttons=[self.task_buttons(ident, job['status']), [{'text': '我的任务', 'callback_data': '/status'}]])
+        elif command == 'status' or (command in {'link', 'cancel', 'resume'} and not arg.strip()):
+            jobs = [(t, job) for t in self.values('bot_task') if t['owner'] == owner
+                    if (job := self.get('download', t['id']))][:5]
+            lines, buttons = ['我的任务', ''], []
+            for index, (task, job) in enumerate(jobs, 1):
+                if not job:
+                    continue
+                lines.extend([f'{index}. {concise(job["track"]["title"])}',
+                              f'{STATUS_LABELS.get(job["status"], job["status"])} · 任务 {task["id"] if message["channel"] == "wecom" else task["id"][:8]}',
+                              self.job_size(job) if job['status'] == 'complete' else job_progress(job), ''])
+                actions = self.task_buttons(task['id'], job['status'], f'{index}. ')
+                if actions:
+                    buttons.append(actions)
+            buttons.append([{'text': '刷新任务', 'callback_data': '/status'}, {'text': '功能菜单', 'callback_data': '/menu'}])
+            if message['channel'] == 'wecom' and len(lines) > 2:
+                lines.append('操作：链接 / 继续 / 取消，加上完整任务编号。')
+            self.reply(message, '\n'.join(lines) if len(lines) > 2 else '我的任务\n\n暂无任务，先搜索喜欢的音乐。', buttons=buttons)
         elif command in {'link', 'cancel', 'resume'}:
             ident = arg.strip()
             owned = self.get('bot_task', ident) if re.fullmatch(r'[a-f0-9]{32}', ident) else None
@@ -273,7 +408,7 @@ class BotService:
                 raise HTTPException(404, '任务记录已删除')
             if command == 'link':
                 url = await asyncio.to_thread(self.links.create, job)
-                self.reply(message, f'{job["track"]["title"]}\n下载原文件（链接持有者可下载，请勿转发）', url=url, job_id=ident)
+                self.reply(message, f'{concise(job["track"]["title"])}\n{self.job_size(job)}\n下载原文件（链接持有者可下载，请勿转发）', url=url, job_id=ident)
             else:
                 await asyncio.to_thread(self.control, ident, command)
                 if command == 'resume':
@@ -281,7 +416,7 @@ class BotService:
                     self.put('bot_task', ident, owned)
                 self.reply(message, '已取消任务。' if command == 'cancel' else '已继续下载。')
         else:
-            self.reply(message, HELP)
+            self.reply(message, HELP, buttons=self.menu_buttons())
 
     async def commands(self):
         while True:
@@ -306,8 +441,23 @@ class BotService:
         response = self.tg_http.post(f'https://api.telegram.org/bot{self.tg_token}/{method}', json=body, timeout=timeout)
         data = response.json()
         if not data.get('ok'):
+            if method == 'editMessageText' and data.get('error_code') == 400 and 'message is not modified' in data.get('description', '').lower():
+                return True
             raise RuntimeError(f'Telegram API error {data.get("error_code")}: {data.get("description", "请求失败")}')
         return data['result']
+
+    async def register_telegram_menu(self):
+        while True:
+            try:
+                for language in ('', 'zh'):
+                    await asyncio.to_thread(self.telegram, 'setMyCommands',
+                                            {'commands': TG_COMMANDS, 'scope': {'type': 'all_private_chats'}, 'language_code': language})
+                await asyncio.to_thread(self.telegram, 'setChatMenuButton', {'menu_button': {'type': 'commands'}})
+                self.log('info', 'Telegram 命令菜单已注册；可发送 /start 或 /menu 打开功能入口', category='bot')
+                return
+            except Exception as error:
+                self.log('warning', f'Telegram 菜单注册失败，将重试：{self.error_detail(error)}；可先发送 /menu 使用功能按钮', category='bot')
+                await asyncio.sleep(60)
 
     async def poll_telegram(self):
         while True:
@@ -325,7 +475,8 @@ class BotService:
                                    str(message['chat'].get('id')) == user)
                     text = callback.get('data', '') if callback else (message or {}).get('text', '')
                     if private and text:
-                        self.accept('tg', user, str(update['update_id']), text)
+                        self.accept('tg', user, str(update['update_id']), text,
+                                    reply_message_id=message.get('message_id') if callback else None)
                     self.put('bot_setting', 'tg_offset', update['update_id'] + 1)
                     if callback and private and self.allowed('tg', user):
                         try:
@@ -348,14 +499,25 @@ class BotService:
             self.token_until = time.time() + max(1, int(data['expires_in']) - 120)
         return self.access_token
 
+    def job_size(self, job):
+        try:
+            return '文件大小：' + format_size(self.links.resolve(job['file']).stat().st_size)
+        except (HTTPException, OSError, KeyError, TypeError):
+            return '文件大小：大小未知（文件不可访问）'
+
     def send(self, item):
         if item['channel'] == 'tg':
             body = {'chat_id': item['user'], 'text': item['text'], 'link_preview_options': {'is_disabled': True}}
             if item.get('url'):
-                body['reply_markup'] = {'inline_keyboard': [[{'text': '下载到手机', 'url': item['url']}]]}
+                body['reply_markup'] = {'inline_keyboard': [[{'text': '下载到手机', 'url': item['url']}],
+                    [{'text': '我的任务', 'callback_data': '/status'}, {'text': '功能菜单', 'callback_data': '/menu'}]]}
             elif item.get('buttons'):
-                body['reply_markup'] = {'inline_keyboard': item['buttons']}
-            self.telegram('sendMessage', body)
+                body['reply_markup'] = {'inline_keyboard': [row for row in item['buttons'] if row]}
+            if item.get('edit_message_id'):
+                body['message_id'] = item['edit_message_id']
+                self.telegram('editMessageText', body)
+            else:
+                self.telegram('sendMessage', body)
             return
         self.wecom_access()
         body = {'touser': item['user'], 'agentid': int(self.agent), 'enable_duplicate_check': 1, 'duplicate_check_interval': 1800}
@@ -384,12 +546,15 @@ class BotService:
                     if job['status'] == 'complete':
                         try:
                             url = await asyncio.to_thread(self.links.create, job)
-                            text = f'下载完成：{job["track"]["title"]}\n任务编号：{job["id"]}\n链接有效期 {self.links.ttl // 60} 分钟；过期后发送：链接 {job["id"]}\n链接持有者可下载，请勿转发。'
+                            minutes = self.links.ttl // 60
+                            validity = f'{minutes // 60} 小时' if minutes % 60 == 0 else f'{minutes} 分钟'
+                            text = f'下载完成\n\n{concise(job["track"]["title"])}\n{self.job_size(job)}\n任务 {job["id"][:8]}\n\n点击「下载到手机」保存原文件。\n链接有效期：{validity}\n过期后打开 /status 获取新链接。\n\n链接请勿转发。'
                         except (HTTPException, OSError):
                             url, text = None, f'文件已删除或变化，请重新下载。任务编号：{job["id"]}'
                     else:
-                        url, text = None, f'{job["track"]["title"]}：{job["status"]}\n任务编号：{job["id"]}\n可发送：继续 {job["id"]}'
-                    self.reply(task, text, url=url, job_id=job['id'] if url else None)
+                        url, text = None, f'{STATUS_LABELS.get(job["status"], job["status"])}\n\n{concise(job["track"]["title"])}\n任务 {job["id"][:8]}\n\n打开 /status 管理任务。'
+                    self.reply(task, text, url=url, job_id=job['id'] if url else None,
+                               buttons=[self.task_buttons(job['id'], job['status']), [{'text': '我的任务', 'callback_data': '/status'}]])
                     task['notified'] = job['status']
                     self.put('bot_task', task['id'], task)
                 for item in sorted(self.values('bot_outbox'), key=lambda x: x['created']):
@@ -436,6 +601,7 @@ class BotService:
             if not message['done']:
                 await self.pending.put(message)
         if self.tg_token:
+            self.tasks.append(asyncio.create_task(self.register_telegram_menu()))
             self.tasks.append(asyncio.create_task(self.poll_telegram()))
         self.log('info', '机器人已启用：仅私聊、白名单用户、下载链接交付', category='bot')
 
