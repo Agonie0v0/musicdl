@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import traceback
+import struct
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -39,11 +40,11 @@ def capture_logs(path, category, task_id, transform=None):
         original.pushlog = previous
 
 
-def search_logged(config, source, keyword, path, task_id):
+def search_logged(config, source, keyword, path, task_id, partial_path=None):
     from legacy import app as original
     with capture_logs(path, 'search', task_id):
         try:
-            return search(config, source, keyword)
+            return search(config, source, keyword, partial_path)
         except Exception:
             original.pushlog('error', f'{source} 搜索异常\n{traceback.format_exc()}')
             raise
@@ -109,12 +110,61 @@ def client_for(config, source=None):
     return _clients[key]
 
 
-def search(config, source, keyword):
+def search(config, source, keyword, partial_path=None):
+    from legacy import app as original
     client = client_for(config, source)
-    # These are exactly the arguments used by the original searchsubset.
-    return client.music_clients[source].search(
-        keyword=keyword, num_threadings=client.clients_threadings[source],
-        request_overrides=client.requests_overrides[source], rule=client.search_rules[source])
+    provider = client.music_clients[source]
+    original.pushlog('info', f'{source} 搜索参数：每源 {provider.search_size_per_source} 条，'
+                     f'每页 {provider.search_size_per_page} 条，严格分页限制 {provider.strict_limit_search_size_per_page}',
+                     category='search')
+    # Observe native appends without replacing any response parser or arguments.
+    # A slow later track must not hide already resolved tracks at a bot's deadline.
+    native_page = provider._search if partial_path else None
+    write_lock = threading.Lock()
+    if partial_path:
+        class Results(list):
+            def append(self, song):
+                super().append(song)
+                if song.with_valid_download_url:
+                    try:
+                        snapshot = copy.copy(song)
+                        snapshot.work_dir, snapshot._save_path = provider.work_dir, None
+                        data = pickle.dumps(snapshot, protocol=pickle.HIGHEST_PROTOCOL)
+                        with write_lock, open(partial_path, 'ab') as handle:
+                            handle.write(struct.pack('!Q', len(data)) + data)
+                    except Exception as error:
+                        original.pushlog('warning', f'{source} 无法增量传递曲目，等待完整结果：{type(error).__name__}',
+                                         category='search')
+        # BaseMusicClient collects the original list after _search returns.
+        # Mirror native appends into that list as well as the IPC stream.
+        def page(*args, **kwargs):
+            args = list(args)
+            target = args[3] if len(args) > 3 else kwargs.get('song_infos')
+            if target is None:
+                return native_page(*args, **kwargs)
+            observed = Results(target)
+            if len(args) > 3:
+                args[3] = observed
+            else:
+                kwargs['song_infos'] = observed
+            try:
+                return native_page(*args, **kwargs)
+            finally:
+                target[:] = observed
+        provider._search = page
+    try:
+        # These are exactly the arguments used by the original searchsubset.
+        songs = provider.search(
+            keyword=keyword, num_threadings=client.clients_threadings[source],
+            request_overrides=client.requests_overrides[source], rule=client.search_rules[source])
+    finally:
+        if partial_path:
+            provider._search = native_page
+    lossless = sum(str(song.ext).lower() in original.MusicClient.LOSSLESS_QUALITY_DEFINITIONS for song in songs)
+    largest = max((int(song.file_size_bytes or 0) for song in songs), default=0)
+    original.pushlog('info', f'{source} 搜索结果：{len(songs)} 条，无损 {lossless} 条，最大文件 {largest} 字节',
+                     category='search')
+    return songs
 
 
 def playlist(config, url):

@@ -234,6 +234,14 @@ def _hookloggerclass():
 
 _hookloggerclass()
 
+try:
+    from provider_compat import install
+    PATCH_STATUS.update({f'audio_compat_{source}': state for source, state in
+                        install(lambda *args, **kwargs: pushlog(*args, **kwargs)).items()})
+except Exception as err:
+    PATCH_STATUS['audio_compat'] = f'skip: {type(err).__name__}'
+    pushlog('error', f'音质兼容修复未加载：{type(err).__name__}', category='search')
+
 
 def parsecookies(raw) -> dict:
     '''accept a raw cookie string ("a=1; b=2") or an already-parsed dict'''

@@ -15,7 +15,7 @@ WORKDIR /app
 ENV HOME=/home/musicdl
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py engine_api.py engine_worker.py local_library.py resumable_download.py bot_notifications.py docker-entrypoint.py ./
+COPY app.py engine_api.py engine_worker.py provider_compat.py local_library.py resumable_download.py bot_notifications.py docker-entrypoint.py ./
 COPY legacy/app.py ./legacy/app.py
 COPY --from=frontend /build/frontend/dist /app/frontend/dist
 COPY LICENSE-musicsquare LICENSE-musicdl-reference /licenses/

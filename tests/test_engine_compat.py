@@ -11,6 +11,7 @@ import tempfile
 import time
 import wave
 import threading
+import pytest
 from concurrent.futures import Future
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -441,6 +442,9 @@ def test_exact_song_info_persists_and_original_downloader_saves_audio():
 def test_original_search_receives_unmodified_parser_arguments(monkeypatch):
     captured = {}
     class Provider:
+        search_size_per_source = 5
+        search_size_per_page = 5
+        strict_limit_search_size_per_page = True
         def search(self, **kwargs):
             captured.update(kwargs)
             return [fixture_song()]
@@ -650,4 +654,214 @@ def test_cancel_blocked_workers_releases_slots_and_retry_is_fresh(monkeypatch, t
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+    asyncio.run(check())
+
+
+def native_quality_provider(name):
+    cls = app.original.MusicClientBuilder.REGISTERED_MODULES[name]
+    provider = object.__new__(cls)
+    provider.default_cookies = {}
+    return provider
+
+
+def quality_song(ext, size, source='KugouMusicClient'):
+    return SongInfo(source=source, identifier='same-platform-id', song_name='同一歌曲', singers='歌手',
+                    ext=ext, file_size_bytes=size, duration_s=200,
+                    download_url='https://example.org/audio.' + ext,
+                    download_url_status={'ok': True})
+
+
+@pytest.mark.parametrize('source', ['KugouMusicClient', 'KuwoMusicClient', 'QQMusicClient', 'NeteaseMusicClient'])
+def test_native_fallback_continues_from_mp3_to_lossless_and_retains_mp3_on_failure(monkeypatch, source):
+    provider = native_quality_provider(source)
+    assert app.original.PATCH_STATUS['audio_compat_' + source] == 'ok'
+    calls = []
+    lossy, lossless = quality_song('mp3', 8000000, source), quality_song('flac', 88706509, source)
+    outcome = [lossy, RuntimeError('parser unavailable'), lossless]
+    def parse(result, overrides):
+        calls.append(overrides)
+        value = outcome.pop(0) if outcome else RuntimeError('unavailable')
+        if isinstance(value, Exception):
+            raise value
+        return value
+    for name in vars(type(provider)):
+        if name.startswith('_parsewith') and name.endswith('api'):
+            monkeypatch.setattr(provider, name, parse)
+    assert provider._parsewiththirdpartapis({}, {'timeout': 30}) is lossless
+    assert len(calls) == 3
+    # Keeping an MP3 fallback is necessary when no lossless interface succeeds.
+    calls.clear()
+    outcome[:] = [lossy, RuntimeError('unavailable')]
+    assert provider._parsewiththirdpartapis({}, {'timeout': 30}) is lossy
+    # Account-bound native behavior must still take precedence.
+    if source != 'NeteaseMusicClient':
+        calls.clear()
+        provider.default_cookies = {'account': 'configured'}
+        assert not provider._parsewiththirdpartapis({}, {}).with_valid_download_url
+        assert not calls
+
+
+@pytest.mark.parametrize('source,method', [
+    ('KugouMusicClient', '_parsewithlzmhhhapi'), ('KuwoMusicClient', '_parsewithxcloudvapi'),
+    ('QQMusicClient', '_parsewithlzmhhhapi'), ('NeteaseMusicClient', '_parsewithlzmhhhapi')])
+def test_native_parser_request_overrides_reach_http_without_keyword_collision(monkeypatch, source, method):
+    import requests
+    provider = native_quality_provider(source)
+    captured = []
+    class ReachedHTTP(Exception):
+        pass
+    def request(url, **kwargs):
+        captured.append(kwargs)
+        raise ReachedHTTP('isolated transport')
+    monkeypatch.setattr(requests, 'post', request)
+    overrides = {'timeout': 30, 'headers': {'X-Test': 'override'}, 'verify': True,
+                 'proxies': {'https': 'http://localhost:7890'}}
+    result = {'hash': 'test', 'mid': 'test', 'id': 'test', 'duration': 200,
+              'albumname': 'album', 'album_name': 'album', 'rid': 'test'}
+    with pytest.raises(ReachedHTTP):
+        getattr(provider, method)(result, overrides)
+    assert len(captured) == 1
+    for key, value in overrides.items():
+        assert captured[0][key] == value
+    assert overrides['headers'] == {'X-Test': 'override'}
+
+
+@pytest.mark.parametrize('source', ['KugouMusicClient', 'KuwoMusicClient', 'QQMusicClient', 'NeteaseMusicClient'])
+def test_quality_dedup_retains_real_versions_with_same_platform_id(source):
+    provider = native_quality_provider(source)
+    mp3 = quality_song('mp3', 8000000, source)
+    cd = quality_song('flac', 25000000, source)
+    hires = quality_song('flac', 88706509, source)
+    assert provider._removeduplicates([mp3, cd, hires, copy.deepcopy(hires)]) == [mp3, cd, hires]
+
+
+def test_reconstructed_result_ids_do_not_merge_different_flac_sizes():
+    remember, song_for = (app.app.state.engine_test[key] for key in ('remember', 'song_for'))
+    cd, hires = quality_song('flac', 25000000), quality_song('flac', 88706509)
+    first, second = remember(cd), remember(hires)
+    assert first['id'] != second['id']
+    assert first['qualities'][0]['lossless'] and second['qualities'][0]['lossless']
+    assert song_for(first['id']).file_size_bytes == 25000000
+    assert song_for(second['id']).file_size_bytes == 88706509
+
+
+def test_parser_failures_and_audio_sizes_are_forwarded_to_search_logs(monkeypatch, tmp_path):
+    import requests
+    provider = native_quality_provider('KugouMusicClient')
+    def fail(url, **kwargs):
+        raise requests.ConnectionError('https://example.org/private?token=secret')
+    monkeypatch.setattr(requests, 'post', fail)
+    path = tmp_path / 'search.log'
+    with engine_worker.capture_logs(path, 'search', 'quality-diagnostic'):
+        with pytest.raises(requests.ConnectionError):
+            provider._parsewithlzmhhhapi({'hash': 'test', 'duration': 200}, {'timeout': 30})
+    entries = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+    assert any('_parsewithlzmhhhapi' in entry['message'] and 'ConnectionError' in entry['message']
+               and entry['task_id'] == 'quality-diagnostic' for entry in entries)
+    assert 'token=secret' not in path.read_text(encoding='utf-8')
+
+
+def test_failed_primary_recovers_flac_through_real_native_backup_parser(monkeypatch, tmp_path):
+    import requests
+    from types import SimpleNamespace
+    provider = native_quality_provider('KugouMusicClient')
+    def unavailable(*args, **kwargs):
+        raise requests.ConnectionError('primary unavailable')
+    # Only the native lzmhhh parser remains live; its HTTP and audio probe are mocked.
+    for name in vars(type(provider)):
+        if name.startswith('_parsewith') and name.endswith('api') and name != '_parsewithlzmhhhapi':
+            monkeypatch.setattr(provider, name, unavailable)
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps({'data': 'https://example.org/test.flac'}).encode()
+    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: response)
+    provider.audio_link_tester = SimpleNamespace(test=lambda **kwargs: {
+        'ok': True, 'ext': 'flac', 'file_size_bytes': 88706509, 'file_size': '84.6 MB',
+        'download_url': 'https://example.org/test.flac'})
+    log = tmp_path / 'recovery.log'
+    with engine_worker.capture_logs(log, 'search', 'recover-flac'):
+        result = provider._parsewiththirdpartapis({'hash': 'test', 'duration': 200,
+                                                 'songname': '稻香', 'singername': '周杰伦'},
+                                                {'timeout': 30})
+    assert result.ext == 'flac' and result.file_size_bytes == 88706509
+    entries = [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines()]
+    assert any('88706509' in entry['message'] and 'flac' in entry['message']
+               and entry['task_id'] == 'recover-flac' for entry in entries)
+
+
+def test_worker_streams_native_appends_without_losing_final_results(monkeypatch, tmp_path):
+    import struct
+    from types import SimpleNamespace
+    class Provider:
+        search_size_per_source = search_size_per_page = 5
+        strict_limit_search_size_per_page = True
+        work_dir = str(tmp_path / 'music')
+        def _search(self, keyword, url, overrides, songs, progress):
+            songs.append(quality_song('flac', 88706509))
+            return songs
+        def search(self, keyword, **kwargs):
+            songs = []
+            self._search(keyword, '', {}, songs, None)
+            # Native search sets directories after all pages return.
+            for song in songs:
+                song.work_dir = self.work_dir + '/native-finished'
+            return songs
+    provider = Provider()
+    native = provider._search
+    monkeypatch.setattr(engine_worker, 'client_for', lambda *args: SimpleNamespace(
+        music_clients={'KugouMusicClient': provider}, clients_threadings={'KugouMusicClient': 1},
+        requests_overrides={'KugouMusicClient': {}}, search_rules={'KugouMusicClient': {}}))
+    path = tmp_path / 'partial'
+    songs = engine_worker.search({}, 'KugouMusicClient', 'test', str(path))
+    data = path.read_bytes()
+    size = struct.unpack('!Q', data[:8])[0]
+    partial = pickle.loads(data[8:8 + size])
+    assert len(songs) == 1 and partial.file_size_bytes == songs[0].file_size_bytes == 88706509
+    assert partial.work_dir == provider.work_dir
+    assert songs[0].work_dir.endswith('/native-finished')
+    assert provider._search == native
+
+
+def test_resolved_tracks_survive_cancellation_of_slow_native_source(monkeypatch, tmp_path):
+    original_popen = engine_api.subprocess.Popen
+    audio = tmp_path / 'resolved.song'
+    audio.write_bytes(pickle.dumps(quality_song('flac', 88706509)))
+    # Publish a fragmented IPC frame, then block on a later unresolved track.
+    script = (
+        'import pickle,struct,sys,time; from pathlib import Path; '
+        'args=pickle.loads(Path(sys.argv[1]).read_bytes()); '
+        'data=Path(sys.argv[2]).read_bytes(); '
+        'f=open(args[5],"ab"); f.write(struct.pack("!Q",len(data))[:4]); f.flush(); '
+        'time.sleep(.15); f.write(struct.pack("!Q",len(data))[4:]+data); f.flush(); '
+        'time.sleep(60)'
+    )
+    children = []
+    def launch(args, **kwargs):
+        if '--search' not in args:
+            return original_popen(args, **kwargs)
+        child = original_popen([sys.executable, '-c', script, args[-2], str(audio)], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(engine_api.subprocess, 'Popen', launch)
+    received = []
+    async def check():
+        search = app.app.state.engine_test['source_results']
+        task = asyncio.create_task(search(app.original.manager.config, 'KugouMusicClient', 'slow-source', received.append))
+        try:
+            for _ in range(100):
+                if received:
+                    break
+                await asyncio.sleep(.02)
+            assert len(received) == 1 and received[0].file_size_bytes == 88706509
+            assert not task.done()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            terminated = all(child.poll() is not None for child in children)
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
+        assert terminated
+        assert not list((_root / 'data' / 'engine').glob('*.search.partial'))
     asyncio.run(check())
