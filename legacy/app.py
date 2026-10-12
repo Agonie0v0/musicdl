@@ -49,6 +49,7 @@ except Exception:
 from musicdl.musicdl import MusicClient, DEFAULT_MUSIC_SOURCES
 from musicdl.modules import MusicClientBuilder, LoggerHandle
 from musicdl.modules.sources.base import BaseMusicClient
+from musicdl.modules.utils import usedownloadheaderscookies
 from musicdl import __version__ as MUSICDL_VERSION
 
 BASE_DIR = Path(os.environ.get('MUSICDL_PROJECT_DIR', Path(__file__).resolve().parent)).resolve()
@@ -868,13 +869,52 @@ def songdetail(sid: str):
     return data
 
 
+@usedownloadheaderscookies
+def _preview_get(client, url, options):
+    # Select the exact download-stage backend, session and defaults of musicdl.
+    return client.get(url, **copy.deepcopy(options))
+
+
+def preview_request(client, source, url, options):
+    response = None
+    try:
+        response = _preview_get(client, url, options)
+        if response is not None:
+            return response
+        raise RuntimeError('原音源客户端未返回音频响应')
+    except Exception:
+        host = urlsplit(url).hostname or ''
+        headers = options.get('headers') or {}
+        session = getattr(client, 'session', None)
+        session_headers = getattr(session, 'headers', {}) or {}
+        has_credentials = (options.get('cookies') or options.get('auth') or getattr(session, 'auth', None)
+                           or getattr(session, 'cookies', None)
+                           or any(k.lower() in {'authorization', 'cookie', 'proxy-authorization'}
+                                  for k in [*headers, *session_headers]))
+        # The Kugou FLAC CDN serves a mismatched certificate. Match the original
+        # downloader's compatibility retry only for credential-free audio CDNs.
+        compatible_cdn = source == 'KugouMusicClient' and re.fullmatch(r'fs(?:[a-z0-9]*|\.[a-z0-9-]+)\.kugou\.com', host)
+        explicit_verification = 'verify' in options and options['verify'] is not False
+        if urlsplit(url).scheme != 'https' or not compatible_cdn or has_credentials or explicit_verification or _env_flag('MUSICDL_PREVIEW_STRICT_TLS'):
+            raise
+        if response is not None:
+            response.close()
+        pushlog('warning', '酷狗音频 CDN 请求失败，使用原引擎的证书兼容重试；未发送账号 Cookie 或认证头', category='playback')
+        retry = {**options, 'verify': False, 'allow_redirects': False}
+        response = _preview_get(client, url, retry)
+        if response is None:
+            raise RuntimeError('酷狗音频 CDN 兼容重试失败')
+        return response
+
+
 @app.get('/api/stream/{sid}')
 def stream(sid: str, request: Request):
     song = getsong(sid)
     if song is None:
         raise HTTPException(404, '结果已过期，请重新搜索')
     try:
-        client = manager.get().music_clients.get(song.source)
+        engine = manager.get()
+        client = engine.music_clients.get(song.source)
     except Exception as err:
         raise HTTPException(400, f'音源初始化失败: {err}')
     if client is None:
@@ -887,26 +927,21 @@ def stream(sid: str, request: Request):
     if not songplayable(song):
         raise HTTPException(415, '该曲目不支持在线播放（加密或流媒体协议），请使用下载功能')
     download_url = validatepublicurl(song.download_url, '音频地址')
-    headers = dict(song.default_download_headers or getattr(client, 'default_headers', None) or {})
+    kwargs = copy.deepcopy(engine.requests_overrides.get(song.source, {}))
+    headers = dict(song.default_download_headers or kwargs.pop('headers', {}) or client.default_download_headers)
     # iter_content decodes compression; byte ranges must refer to raw audio.
     headers = {k: v for k, v in headers.items() if k.lower() not in {'range', 'if-range', 'accept-encoding'}}
     headers['Accept-Encoding'] = 'identity'
-    cookies = dict(song.default_download_cookies or {})
+    cookies = dict(song.default_download_cookies or kwargs.pop('cookies', {}) or client.default_download_cookies)
     if request.headers.get('range'):
         headers['Range'] = request.headers['range']
     if request.headers.get('if-range'):
         headers['If-Range'] = request.headers['if-range']
-    proxies = manager.config['requests_overrides'].get(song.source, {}).get('proxies')
-    if proxies is None and (manager.config.get('proxy_url') or '').strip():
-        scope = manager.config.get('proxy_scope', 'all')
-        srcs = set(manager.config.get('proxy_sources') or [])
-        if scope == 'all' or song.source in srcs:
-            p = manager.config['proxy_url'].strip()
-            proxies = {'http': p, 'https': p}
-    kwargs = {'stream': True, 'headers': headers, 'cookies': cookies, 'timeout': 30, 'proxies': proxies}
+    kwargs.update(stream=True, headers=headers, cookies=cookies)
+    kwargs.setdefault('timeout', 30)
     upstream = None
     try:
-        upstream = pyrequests.get(download_url, **kwargs)
+        upstream = preview_request(client, song.source, download_url, kwargs)
         upstream.raise_for_status()
         encoded = upstream.headers.get('Content-Encoding', 'identity').lower() not in {'', 'identity'}
         if encoded and upstream.status_code == 206:
@@ -914,7 +949,7 @@ def stream(sid: str, request: Request):
             upstream.close()
             headers.pop('Range', None)
             headers.pop('If-Range', None)
-            upstream = pyrequests.get(download_url, **kwargs)
+            upstream = preview_request(client, song.source, download_url, kwargs)
             upstream.raise_for_status()
             encoded = upstream.headers.get('Content-Encoding', 'identity').lower() not in {'', 'identity'}
             if upstream.status_code != 200:
@@ -922,13 +957,14 @@ def stream(sid: str, request: Request):
         chunks = iter(upstream.iter_content(chunk_size=64 * 1024))
         first = next(chunks, b'')
         prefix = first.lstrip()[:32].lower()
-        if not first or prefix.startswith((b'<!doctype', b'<html', b'<?xml', b'{', b'[')):
+        starts_at_zero = upstream.status_code == 200 or re.match(r'bytes 0-', upstream.headers.get('Content-Range', ''))
+        if not first or (starts_at_zero and prefix.startswith((b'<!doctype', b'<html', b'<?xml', b'{', b'['))):
             raise ValueError('音源返回空内容或错误页面')
     except Exception as err:
         if upstream is not None:
             upstream.close()
-        pushlog('error', f'在线试听拉取失败：{song.song_name} · {song.source} · {type(err).__name__}', category='playback')
-        raise HTTPException(502, '在线试听地址不可用，请重新搜索、更换音源，或下载后从音乐文件中播放')
+        pushlog('error', f'在线试听拉取失败：{song.song_name} · {song.source} · {type(err).__name__} · HTTP {getattr(upstream, "status_code", "未知")}', category='playback')
+        raise HTTPException(502, '在线试听音频请求失败，请查看播放日志或重新搜索')
     resp_headers = {'Accept-Ranges': 'none' if encoded else upstream.headers.get('Accept-Ranges', 'none')}
     for h in (() if encoded else ('Content-Length', 'Content-Range', 'ETag', 'Last-Modified')):
         if h in upstream.headers:

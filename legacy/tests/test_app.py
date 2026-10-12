@@ -25,7 +25,8 @@ def test_audio_stream_normalizes_mime_and_compressed_range(monkeypatch, encoded,
                            protocol='HTTP', download_url='https://example.org/audio',
                            default_download_headers={'User-Agent': 'fixture'}, default_download_cookies={})
     monkeypatch.setattr(app, 'getsong', lambda sid: song)
-    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={'KugouMusicClient': SimpleNamespace(default_headers={})}))
+    provider = SimpleNamespace(default_download_headers={}, default_download_cookies={}, get=lambda url, **kwargs: app.pyrequests.get(url, **kwargs))
+    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={'KugouMusicClient': provider}, requests_overrides={}))
     monkeypatch.setattr(app, 'validatepublicurl', lambda url, label: url)
     monkeypatch.setattr(app, 'AUTH_ENABLED', False)
     first = Mock()
@@ -68,7 +69,8 @@ def test_audio_stream_rejects_error_page_instead_of_labelling_it_audio(monkeypat
                            protocol='HTTP', download_url='https://example.org/audio',
                            default_download_headers={}, default_download_cookies={})
     monkeypatch.setattr(app, 'getsong', lambda sid: song)
-    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={'KugouMusicClient': SimpleNamespace(default_headers={})}))
+    provider = SimpleNamespace(default_download_headers={}, default_download_cookies={}, get=lambda url, **kwargs: app.pyrequests.get(url, **kwargs))
+    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={'KugouMusicClient': provider}, requests_overrides={}))
     monkeypatch.setattr(app, 'validatepublicurl', lambda url, label: url)
     monkeypatch.setattr(app, 'AUTH_ENABLED', False)
     upstream = Mock(status_code=200, headers={'Content-Type': 'text/html'})
@@ -76,9 +78,102 @@ def test_audio_stream_rejects_error_page_instead_of_labelling_it_audio(monkeypat
     monkeypatch.setattr(app.pyrequests, 'get', lambda *args, **kwargs: upstream)
     response = TestClient(app.app).get('/api/stream/fixture')
     assert response.status_code == 502
-    assert '下载后' in response.json()['detail']
+    assert '播放日志' in response.json()['detail']
     upstream.close.assert_called_once()
     assert any(entry['category'] == 'playback' and '在线试听拉取失败' in entry['message'] for entry in app.LOGS)
+
+
+def test_preview_uses_original_download_backend_cookies_and_request_overrides(monkeypatch):
+    from unittest.mock import Mock
+    response = Mock(status_code=200, headers={'Content-Type': 'audio/flac'})
+    response.iter_content.return_value = iter([b'fLaC' + b'\0' * 20])
+    provider = SimpleNamespace(default_download_headers={'User-Agent': 'download-agent'},
+        default_download_cookies={'session': 'download-cookie'}, default_headers={'User-Agent': 'search-agent'},
+        default_cookies={}, enable_download_curl_cffi=True, enable_curl_cffi=False, _initsession=Mock())
+    def provider_get(url, **options):
+        assert provider.enable_curl_cffi is True
+        assert provider.default_headers == provider.default_download_headers
+        assert provider.default_cookies == provider.default_download_cookies
+        assert options['cookies'] == {'session': 'download-cookie'}
+        assert options['params'] == {'needed': 'yes'}
+        assert options['timeout'] == 90
+        assert options['proxies'] == {'https': 'http://proxy.example:7890'}
+        assert options['headers']['X-Required'] == 'keep'
+        assert options['headers']['Range'] == 'bytes=0-'
+        return response
+    provider.get = Mock(side_effect=provider_get)
+    overrides = {'MiguMusicClient': {'headers': {'X-Required': 'keep'}, 'params': {'needed': 'yes'},
+                                      'timeout': 90, 'proxies': {'https': 'http://proxy.example:7890'}}}
+    song = SimpleNamespace(source='MiguMusicClient', ext='flac', song_name='fixture', downloaded_contents=None,
+                           protocol='HTTP', download_url='https://example.org/audio',
+                           default_download_headers={}, default_download_cookies={})
+    monkeypatch.setattr(app, 'getsong', lambda sid: song)
+    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={'MiguMusicClient': provider}, requests_overrides=overrides))
+    monkeypatch.setattr(app, 'validatepublicurl', lambda url, label: url)
+    monkeypatch.setattr(app, 'AUTH_ENABLED', False)
+    result = TestClient(app.app).get('/api/stream/fixture', headers={'Range': 'bytes=0-'})
+    assert result.status_code == 200 and result.content.startswith(b'fLaC')
+    provider.get.assert_called_once()
+    provider._initsession.assert_called_once()
+    assert overrides['MiguMusicClient']['headers'] == {'X-Required': 'keep'}
+
+
+@pytest.mark.parametrize('host,cookies,strict,compatible', [
+    ('fs.youthandroid2.kugou.com', {}, False, True),
+    ('fs.youthandroid2.kugou.com', {'account': 'secret'}, False, False),
+    ('fs.youthandroid2.kugou.com', {}, True, False),
+    ('other.example.org', {}, False, False),
+    ('fs.youthandroid2.kugou.com.evil.example', {}, False, False),
+])
+def test_kugou_certificate_retry_is_scoped_to_public_audio_cdn(monkeypatch, host, cookies, strict, compatible):
+    from unittest.mock import Mock
+    response = Mock()
+    provider = SimpleNamespace(default_download_headers={}, default_download_cookies={}, get=Mock(side_effect=[None, response]))
+    monkeypatch.setenv('MUSICDL_PREVIEW_STRICT_TLS', '1' if strict else '0')
+    options = {'headers': {'Range': 'bytes=0-'}, 'cookies': cookies}
+    if compatible:
+        assert app.preview_request(provider, 'KugouMusicClient', f'https://{host}/file.flac', options) is response
+        assert provider.get.call_args.kwargs['verify'] is False
+        assert provider.get.call_args.kwargs['allow_redirects'] is False
+        assert 'verify' not in options
+    else:
+        with pytest.raises(RuntimeError):
+            app.preview_request(provider, 'KugouMusicClient', f'https://{host}/file.flac', options)
+        assert provider.get.call_count == 1
+
+
+def test_range_in_middle_of_audio_is_not_mistaken_for_error_json(monkeypatch):
+    from unittest.mock import Mock
+    content = b'{' + b'\x80' * 30
+    response = Mock(status_code=206, headers={'Content-Range': 'bytes 1024-1054/2048', 'Content-Length': '31'})
+    response.iter_content.return_value = iter([content])
+    provider = SimpleNamespace(default_download_headers={}, default_download_cookies={}, get=Mock(return_value=response))
+    song = SimpleNamespace(source='MiguMusicClient', ext='flac', song_name='fixture', downloaded_contents=None,
+        protocol='HTTP', download_url='https://example.org/audio', default_download_headers={}, default_download_cookies={})
+    monkeypatch.setattr(app, 'getsong', lambda sid: song)
+    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={'MiguMusicClient': provider}, requests_overrides={}))
+    monkeypatch.setattr(app, 'validatepublicurl', lambda url, label: url)
+    monkeypatch.setattr(app, 'AUTH_ENABLED', False)
+    result = TestClient(app.app).get('/api/stream/fixture', headers={'Range': 'bytes=1024-'})
+    assert result.status_code == 206 and result.content == content
+
+
+@pytest.mark.parametrize('options,session', [
+    ({'headers': {'Authorization': 'Bearer private'}}, None),
+    ({'auth': ('user', 'password')}, None),
+    ({'verify': True}, None),
+    ({'verify': '/custom/ca.pem'}, None),
+    ({}, SimpleNamespace(cookies={'session': 'private'}, headers={})),
+    ({}, SimpleNamespace(cookies={}, headers={'Authorization': 'Bearer private'})),
+])
+def test_certificate_compatibility_never_overrides_credentials_or_explicit_trust(monkeypatch, options, session):
+    from unittest.mock import Mock
+    provider = SimpleNamespace(default_download_headers={}, default_download_cookies={},
+                               session=session, get=Mock(return_value=None))
+    monkeypatch.setenv('MUSICDL_PREVIEW_STRICT_TLS', '0')
+    with pytest.raises(RuntimeError):
+        app.preview_request(provider, 'KugouMusicClient', 'https://fs.youthandroid2.kugou.com/audio.flac', options)
+    provider.get.assert_called_once()
 
 
 @pytest.fixture(autouse=True)

@@ -230,32 +230,19 @@ def test_local_song_library_plays_and_edits_real_audio_tags():
     lyrics.unlink()
 
 
-def test_search_playback_reuses_downloaded_audio_and_falls_back_if_deleted(monkeypatch):
+def test_search_playback_does_not_require_or_create_a_download(monkeypatch):
     client = TestClient(app.app)
     song = fixture_song()
     song.identifier, song.song_name = 'cached-playback', 'cached playback'
     track = app.app.state.engine_test['remember'](song)
-    audio = app.original.FILE_ROOT / 'cached-playback.wav'
-    audio.parent.mkdir(parents=True, exist_ok=True)
-    audio.write_bytes(song.downloaded_contents)
-    token = json.dumps([str(app.original.FILE_ROOT), audio.name])
-    app.app.state.bots.put('download', 'cached-playback', {'id': 'cached-playback', 'status': 'complete', 'track': track, 'file': token})
+    before = client.get('/api/downloads').json()
     prepared = client.post(f'/api/tracks/{track["id"]}/playback', headers=HEADERS).json()
     assert prepared['id'] == track['id']
-    assert prepared['playback']['detail'] == '播放已下载文件'
-    assert prepared['playback']['url'].startswith('/api/files/audio?')
-    def fail_upstream(*args):
-        raise AssertionError('cached playback must not contact the provider')
-    monkeypatch.setattr(app.original, 'stream', fail_upstream)
-    # Both freshly prepared URLs and old search-result stream URLs use the cache.
-    for url in (prepared['playback']['url'], track['playback']['url']):
-        response = client.get(url, headers={'Range': 'bytes=0-19'})
-        assert response.status_code == 206 and response.content == audio.read_bytes()[:20]
-        assert response.headers['content-type'] == 'audio/wav'
-    audio.unlink()
-    prepared = client.post(f'/api/tracks/{track["id"]}/playback', headers=HEADERS).json()
     assert prepared['playback']['url'] == track['playback']['url']
-    app.app.state.bots.remove('download', 'cached-playback')
+    response = client.get(prepared['playback']['url'])
+    assert response.status_code == 200 and response.content == song.downloaded_contents
+    assert response.headers['content-type'] == 'audio/wav'
+    assert client.get('/api/downloads').json() == before
 
 
 def test_tag_edit_failure_keeps_file_and_checks_library_boundary():
