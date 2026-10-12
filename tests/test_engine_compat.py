@@ -1,8 +1,11 @@
 """Behavior checks against the installed original engine, not rewritten URLs."""
 import copy
+import asyncio
 import io
 import json
 import os
+import pickle
+import sys
 from pathlib import Path
 import tempfile
 import time
@@ -21,20 +24,29 @@ from fastapi.testclient import TestClient
 from musicdl.modules import SongInfo
 import app
 import engine_worker
+import engine_api
+from engine_api import SearchBody
 
 HEADERS = {'X-MusicDL-Request': '1'}
 
 
 def test_bot_uses_shared_engine_queue_and_signed_link_without_web_login(monkeypatch):
     import asyncio
+    import pickle
+    import engine_api
     from bot_notifications import DownloadLinks
     bot = app.app.state.bots
-    state = app.app.state.engine_test
-    def inline_submit(fn, *args):
-        future = Future()
-        future.set_result([fixture_song()])
-        return future
-    monkeypatch.setattr(state['search_pool'], 'submit', inline_submit)
+    original_popen = engine_api.subprocess.Popen
+    def search_process(args, **kwargs):
+        if '--search' not in args:
+            return original_popen(args, **kwargs)
+        Path(args[-1]).write_bytes(pickle.dumps([fixture_song()]))
+        class Completed:
+            returncode = 0
+            def poll(self):
+                return 0
+        return Completed()
+    monkeypatch.setattr(engine_api.subprocess, 'Popen', search_process)
     monkeypatch.setattr(bot, 'sources', ['netease'])
     monkeypatch.setattr(bot, 'tg_users', {'123'})
     monkeypatch.setattr(bot, 'links', DownloadLinks(bot.get, bot.put, bot.links.resolve if bot.links else
@@ -511,3 +523,72 @@ def test_pause_preserves_bytes_and_new_worker_resumes_original_download():
         assert not staging.exists()
     finally:
         server.shutdown()
+
+
+def endpoint(path, method):
+    return next(r.endpoint for r in app.app.routes
+                if getattr(r, 'path', '') == path and method in getattr(r, 'methods', set()))
+
+
+def test_cancel_before_start_does_not_exhaust_job_limit():
+    async def check():
+        start = endpoint('/api/search/jobs', 'POST')
+        stop = endpoint('/api/search/jobs/{ident}', 'DELETE')
+        for i in range(12):
+            job = await start(SearchBody(keyword=f'cancel-{i}', sources=['netease']))
+            await stop(job['id'])
+    asyncio.run(check())
+
+
+def test_cancel_blocked_workers_releases_slots_and_retry_is_fresh(monkeypatch, tmp_path):
+    original_popen = engine_api.subprocess.Popen
+    processes = []
+    song_path = tmp_path / 'songs.pickle'
+    song_path.write_bytes(pickle.dumps([fixture_song()]))
+    # Exercise real child-process termination and IPC without external APIs.
+    script = (
+        'import pickle,sys,time; from pathlib import Path; '
+        'keyword=pickle.loads(Path(sys.argv[1]).read_bytes())[2]; '
+        'time.sleep(60 if keyword.startswith("blocked") else 0); '
+        'Path(sys.argv[2]).write_bytes(Path(sys.argv[3]).read_bytes())'
+    )
+    def launch(args, **kwargs):
+        if '--search' not in args:
+            return original_popen(args, **kwargs)
+        process = original_popen([sys.executable, '-c', script, args[-2], args[-1], str(song_path)], **kwargs)
+        processes.append(process)
+        return process
+    monkeypatch.setattr(engine_api.subprocess, 'Popen', launch)
+
+    async def check():
+        search = app.app.state.engine_test['source_results']
+        cfg = app.original.manager.config
+        tasks = [asyncio.create_task(search(cfg, 'NeteaseMusicClient', f'blocked-{i}')) for i in range(6)]
+        try:
+            for _ in range(100):
+                if len(processes) == 6:
+                    break
+                await asyncio.sleep(.01)
+            assert len(processes) == 6
+            fresh = asyncio.create_task(search(cfg, 'NeteaseMusicClient', 'retry'))
+            for task in tasks:
+                task.cancel()
+            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 10)
+            assert all(p.poll() is not None for p in processes[:6])
+            result = await asyncio.wait_for(fresh, 10)
+            assert result[0].song_name == fixture_song().song_name
+            # Neither empty nor successful results may suppress a user's retry.
+            song_path.write_bytes(pickle.dumps([]))
+            assert await search(cfg, 'NeteaseMusicClient', 'retry') == []
+            song_path.write_bytes(pickle.dumps([fixture_song()]))
+            assert len(await search(cfg, 'NeteaseMusicClient', 'retry')) == 1
+            assert len(processes) == 9
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+    asyncio.run(check())

@@ -205,6 +205,10 @@ try {
   wav.writeUInt16LE(16, 34);
   wav.write("data", 36);
   wav.writeUInt32LE(wav.length - 44, 40);
+  const searchRequests = [],
+    cancelledSearches = [],
+    searchKeywords = new Map(),
+    heldSearches = new Map();
   await page.route("**/api/**", async (route) => {
     const request = route.request(),
       p = new URL(request.url()).pathname.replace("/api", ""),
@@ -302,8 +306,22 @@ try {
           ? "downloading"
           : "cancelled";
       result = jobs[0];
-    } else if (p === "/search/jobs") result = { id: "search-1" };
-    else if (p.endsWith("/events")) {
+    } else if (p === "/search/jobs") {
+      const keyword = request.postDataJSON().keyword;
+      searchRequests.push(keyword);
+      const id = `search-${searchRequests.length}`;
+      searchKeywords.set(id, keyword);
+      result = { id };
+    } else if (p.endsWith("/events")) {
+      const id = p.split("/")[3];
+      const keyword = searchKeywords.get(id);
+      if (keyword === "连接失败") {
+        await route.abort();
+        return;
+      }
+      if (keyword === "慢搜索") {
+        await new Promise((resolve) => heldSearches.set(id, resolve));
+      }
       const body = [
         ["source", { id: "netease", status: { state: "complete", count: 1 } }],
         [
@@ -347,8 +365,13 @@ try {
         libraryFiles = libraryFiles.filter((file) => file.path !== path);
         result = { deleted: true };
       } else result = libraryFiles;
-    } else if (p.startsWith("/search/jobs/")) result = { cancelled: true };
-    else throw new Error(`Unhandled test API ${p}`);
+    } else if (p.startsWith("/search/jobs/")) {
+      const id = p.split("/")[3];
+      cancelledSearches.push(id);
+      heldSearches.get(id)?.();
+      heldSearches.delete(id);
+      result = { cancelled: true };
+    } else throw new Error(`Unhandled test API ${p}`);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -372,6 +395,49 @@ try {
     .getByRole("button", { name: "播放 测试曲目", exact: true })
     .waitFor();
   assert.equal(await page.locator("tbody tr").count(), 1);
+  const submitSearch = async (keyword) => {
+    await page.getByLabel("搜索音乐", { exact: true }).fill(keyword);
+    await page.getByRole("button", { name: "搜索", exact: true }).click();
+  };
+  await expect(
+    page.getByRole("button", { name: "停止搜索", exact: true }),
+  ).toHaveCount(0);
+  await submitSearch("再次搜索");
+  await expect(
+    page.getByRole("button", { name: "播放 测试曲目", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "停止搜索", exact: true }),
+  ).toHaveCount(0);
+  await submitSearch("慢搜索");
+  await expect.poll(() => heldSearches.size).toBe(1);
+  await submitSearch("替换搜索");
+  await expect(
+    page.getByRole("button", { name: "播放 测试曲目", exact: true }),
+  ).toBeVisible();
+  assert.ok(cancelledSearches.includes("search-3"));
+  await expect(
+    page.getByRole("button", { name: "停止搜索", exact: true }),
+  ).toHaveCount(0);
+  await submitSearch("连接失败");
+  await expect(
+    page.getByText("搜索连接已断开，请重新搜索", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "停止搜索", exact: true }),
+  ).toHaveCount(0);
+  await submitSearch("测试");
+  await expect(
+    page.getByRole("button", { name: "播放 测试曲目", exact: true }),
+  ).toBeVisible();
+  assert.deepEqual(searchRequests, [
+    "测试",
+    "再次搜索",
+    "慢搜索",
+    "替换搜索",
+    "连接失败",
+    "测试",
+  ]);
   await page.getByRole("button", { name: "仅无损", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "仅无损", exact: true }),

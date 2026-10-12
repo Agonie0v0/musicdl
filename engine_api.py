@@ -208,7 +208,8 @@ def install(old, root):
     router = APIRouter()
     search_pool = ProcessPoolExecutor(max_workers=6, mp_context=multiprocessing.get_context('spawn'))
     download_pool = ThreadPoolExecutor(max_workers=max(1, min(4, int(os.environ.get('MUSICDL_MAX_DOWNLOAD_TASKS', '2')))))
-    searches, cache, inflight = OrderedDict(), OrderedDict(), {}
+    searches = OrderedDict()
+    search_slots = asyncio.Semaphore(6)
     runners, runner_lock = {}, threading.RLock()
 
     def read_worker_logs(path, cursor=0):
@@ -271,7 +272,6 @@ def install(old, root):
             old.putconfig(old.ConfigBody(**body))
         except (ValueError, AssertionError) as error:
             raise HTTPException(400, str(error))
-        cache.clear()
         return {'saved': True}
 
     @router.put('/api/config')
@@ -310,7 +310,6 @@ def install(old, root):
             old.manager.applyconfig(cfg)
         except Exception as error:
             raise HTTPException(400, f'原音源配置初始化失败：{type(error).__name__}')
-        cache.clear()
         return {'saved': True, 'restart_required': False}
 
     def emit(job, kind, value):
@@ -318,29 +317,37 @@ def install(old, root):
         job['changed'].set()
 
     async def source_results(cfg, source, keyword):
-        key = hashlib.sha256(json.dumps([cfg, source, keyword], sort_keys=True).encode()).hexdigest()
-        cached = cache.get(key)
-        if cached and time.monotonic() - cached[0] < 120:
-            old.pushlog('debug', f'{source} 命中搜索缓存，{len(cached[1])} 个结果', category='search')
-            return cached[1]
-        if key not in inflight:
-            # The original engine owns its retries and multi-stage parsing.
-            # Do not discard it after the former six-second playback deadline.
+        # Each search owns its process: cancelling an abandoned request must
+        # free a slot even when the provider is blocked in native I/O.
+        async with search_slots:
             operation = uuid.uuid4().hex
             log_path = private / f'{operation}.search.log'
+            input_path = private / f'{operation}.search.input'
+            output_path = private / f'{operation}.search.output'
+            process, cursor = None, 0
             old.pushlog('info', f'{source} 开始搜索：{keyword}', category='search', task_id=operation)
-            future = asyncio.wrap_future(search_pool.submit(engine_worker.search_logged, cfg, source, keyword, str(log_path), operation))
-            inflight[key] = asyncio.create_task(collect_worker_logs(future, log_path))
-        future = inflight[key]
-        try:
-            songs = await asyncio.shield(future)
-            cache[key] = (time.monotonic(), songs)
-            while len(cache) > 128:
-                cache.popitem(last=False)
-            return songs
-        finally:
-            if future.done():
-                inflight.pop(key, None)
+            try:
+                input_path.write_bytes(pickle.dumps((cfg, source, keyword, str(log_path), operation)))
+                process = subprocess.Popen([sys.executable, str(root / 'engine_worker.py'), '--search',
+                                            str(input_path), str(output_path)], cwd=root,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                                           start_new_session=os.name != 'nt')
+                while process.poll() is None:
+                    cursor = read_worker_logs(log_path, cursor)
+                    await asyncio.sleep(.1)
+                if process.returncode or not output_path.exists():
+                    raise RuntimeError('原音源搜索进程异常退出，请查看运行日志')
+                return pickle.loads(output_path.read_bytes())
+            finally:
+                await asyncio.to_thread(terminate, process)
+                while log_path.exists():
+                    updated = read_worker_logs(log_path, cursor)
+                    if updated == cursor:
+                        break
+                    cursor = updated
+                for path in (input_path, output_path, log_path):
+                    path.unlink(missing_ok=True)
 
     async def run_search(job, cfg, sources, keyword):
         async def run_source(name):
@@ -361,8 +368,9 @@ def install(old, root):
         try:
             await asyncio.gather(*(run_source(name) for name in sources))
         finally:
-            emit(job, 'done', {'cancelled': job['cancelled']})
-            job['done'] = True
+            if not job['done']:
+                emit(job, 'done', {'cancelled': job['cancelled']})
+                job['done'] = True
             old.pushlog('info', '搜索已停止' if job['cancelled'] else '全部音源搜索结束', category='search')
 
     @router.post('/api/search/jobs')
@@ -389,8 +397,16 @@ def install(old, root):
     @router.delete('/api/search/jobs/{ident}')
     async def search_stop(ident: str):
         if ident in searches:
-            searches[ident]['cancelled'] = True
-            searches[ident]['task'].cancel()
+            job = searches[ident]
+            if not job['done']:
+                if not job['cancelled']:
+                    job['cancelled'] = True
+                    job['task'].cancel()
+                await asyncio.shield(asyncio.gather(job['task'], return_exceptions=True))
+                # A task cancelled before its first step never enters finally.
+                if not job['done']:
+                    emit(job, 'done', {'cancelled': True})
+                    job['done'] = True
         return {'cancelled': True}
 
     @router.get('/api/search/jobs/{ident}/events')
@@ -902,6 +918,8 @@ def install(old, root):
 
     @old.app.on_event('shutdown')
     async def shutdown():
+        for ident in list(searches):
+            await search_stop(ident)
         for ident in list(runners):
             await asyncio.to_thread(control_download, ident, 'pause')
         if hasattr(search_pool, 'terminate_workers'):

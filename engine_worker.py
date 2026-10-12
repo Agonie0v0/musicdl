@@ -214,4 +214,9 @@ def _download(input_path, output_path):
 
 
 if __name__ == '__main__':
-    download(sys.argv[1], sys.argv[2])
+    if sys.argv[1] == '--search':
+        input_path, output_path = Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve()
+        output_path.write_bytes(pickle.dumps(search_logged(*pickle.loads(input_path.read_bytes())),
+                                            protocol=pickle.HIGHEST_PROTOCOL))
+    else:
+        download(sys.argv[1], sys.argv[2])

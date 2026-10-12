@@ -269,8 +269,8 @@ export function App() {
     if (!keyword.trim() || !config) return;
     const generation = ++searchGeneration.current;
     eventSource.current?.close();
-    if (searchJob.current)
-      void api(`/search/jobs/${searchJob.current}`, "DELETE").catch(() => {});
+    const previousJob = searchJob.current;
+    searchJob.current = null;
     setView("search");
     setQuery(keyword);
     setTracks([]);
@@ -284,12 +284,14 @@ export function App() {
     setFirstMs(null);
     startTime.current = performance.now();
     try {
+      if (previousJob) await api(`/search/jobs/${previousJob}`, "DELETE");
+      if (generation !== searchGeneration.current) return;
       const { id } = await api<{ id: string }>("/search/jobs", "POST", {
         keyword,
         sources: config.sources,
       });
       if (generation !== searchGeneration.current) {
-        void api(`/search/jobs/${id}`, "DELETE");
+        void api(`/search/jobs/${id}`, "DELETE").catch(() => {});
         return;
       }
       searchJob.current = id;
@@ -320,30 +322,33 @@ export function App() {
         const value = JSON.parse((event as MessageEvent).data);
         setStatuses((previous) => ({ ...previous, [value.id]: value.status }));
       });
-      events.addEventListener("done", () => {
+      const finish = (detail = "本次搜索已结束，音源未返回结果") => {
         if (generation !== searchGeneration.current) return;
         setSearching(false);
+        searchJob.current = null;
+        eventSource.current = null;
         setStatuses((previous) =>
           Object.fromEntries(
             Object.entries(previous).map(([id, status]) => [
               id,
               status.state === "searching"
-                ? { state: "stopped", detail: "本次搜索已结束，音源未返回结果" }
+                ? { state: "stopped", detail }
                 : status,
             ]),
           ),
         );
         events.close();
-      });
+      };
+      events.addEventListener("done", () => finish());
       events.addEventListener("error", (event) => {
-        if ("data" in event) {
-          setNotice(JSON.parse(String(event.data)).detail);
-          return;
-        }
-        if (events.readyState === EventSource.CLOSED) {
-          setSearching(false);
-          setNotice("搜索连接已关闭，请重试");
-        }
+        if (generation !== searchGeneration.current) return;
+        const detail =
+          "data" in event
+            ? JSON.parse(String(event.data)).detail
+            : "搜索连接已断开，请重新搜索";
+        finish(detail);
+        setNotice(detail);
+        void api(`/search/jobs/${id}`, "DELETE").catch(() => {});
       });
     } catch (error) {
       if (generation === searchGeneration.current) {
@@ -1233,6 +1238,8 @@ export function App() {
                         `/search/jobs/${searchJob.current}`,
                         "DELETE",
                       ).catch(fail);
+                    searchJob.current = null;
+                    eventSource.current = null;
                     setSearching(false);
                   }}
                 >
