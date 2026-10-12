@@ -21,10 +21,11 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import engine_worker
+import local_library
 
 ALIASES = {'migu': 'MiguMusicClient', 'netease': 'NeteaseMusicClient', 'qq': 'QQMusicClient',
            'kuwo': 'KuwoMusicClient', 'qianqian': 'QianqianMusicClient'}
@@ -59,6 +60,12 @@ class ImportBody(BaseModel):
 
 class PlaylistNameBody(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+
+
+class FileTagsBody(BaseModel):
+    title: str = Field(max_length=300)
+    artist: str = Field(max_length=300)
+    album: str = Field(max_length=300)
 
 
 def install(old, root):
@@ -413,6 +420,9 @@ def install(old, root):
 
     @router.post('/api/tracks/{sid}/playback')
     def playback(sid: str):
+        record = get('track', sid)
+        if record and record.get('local_path'):
+            return library_file(record['local_path'])['track']
         result = remember(song_for(sid), sid)
         old.pushlog('info', f'准备试听：{result["title"]} · {result["source"]} · {result["playback"]["codec"]}', category='playback')
         return result
@@ -423,6 +433,12 @@ def install(old, root):
 
     @router.get('/api/tracks/{sid}/lyrics')
     def lyrics(sid: str):
+        record = get('track', sid)
+        if record and record.get('local_path'):
+            try:
+                return {'text': local_library.read_lyrics(resolve_library_file(record['local_path']))}
+            except (OSError, ValueError, local_library.mutagen.MutagenError):
+                return {'text': ''}
         text = song_for(sid).lyric
         return {'text': text if text and str(text).lower() not in {'none', 'null'} else ''}
 
@@ -763,7 +779,13 @@ def install(old, root):
         for value in old.files()['files']:
             if '.partial' in Path(value['rel']).parts:
                 continue
-            result.append({'path': json.dumps([value['dir'], value['rel']], ensure_ascii=False), 'name': value['name'], 'size': value['size']})
+            if value['name'].startswith('.musicdl-tags-'):
+                continue
+            token = json.dumps([value['dir'], value['rel']], ensure_ascii=False)
+            try:
+                result.append(library_file(token))
+            except (HTTPException, OSError):
+                continue
         return result
 
     def resolve_library_file(path):
@@ -777,6 +799,71 @@ def install(old, root):
         if '.partial' in Path(relative).parts:
             raise HTTPException(403, '不能操作下载中的临时文件')
         return old.resolvefile(base, relative)
+
+    def library_file(token):
+        target = resolve_library_file(token)
+        base, relative = json.loads(file_token(target))
+        info = target.stat()
+        result = {'path': file_token(target), 'name': target.name, 'size': info.st_size,
+                  'folder': Path(relative).parent.as_posix(), 'root': base, 'editable': False}
+        if target.suffix.lower() not in local_library.AUDIO_EXTENSIONS:
+            return result
+        tags = local_library.read_metadata(str(target), info.st_mtime_ns, info.st_size)
+        ident = 'local-' + hashlib.sha256(result['path'].encode()).hexdigest()[:24]
+        codec = target.suffix.lower().lstrip('.')
+        track = {'id': ident, 'source': 'local', 'source_id': 'local', 'title': tags['title'], 'artist': tags['artist'],
+                 'album': tags['album'], 'duration': tags['duration'], 'size_bytes': info.st_size, 'qualities': [],
+                 'cover': '/api/files/cover?path=' + quote(result['path']) + f'&v={info.st_mtime_ns}' if tags['has_cover'] else None,
+                 'playback': {'state': 'ready', 'url': '/api/files/audio?path=' + quote(result['path']),
+                              'codec': codec, 'bitrate': round(tags['bitrate'] / 1000) if tags['bitrate'] else None, 'detail': '音乐库文件', 'preview_only': False}}
+        record = {'track': track, 'local_path': result['path']}
+        if get('track', ident) != record:
+            put('track', ident, record)
+        result.update(track=track, editable=tags['editable'])
+        return result
+
+    @router.get('/api/files/audio')
+    def local_audio(path: str):
+        target = resolve_library_file(path)
+        if target.suffix.lower() not in local_library.AUDIO_EXTENSIONS:
+            raise HTTPException(400, '请选择音频文件')
+        return FileResponse(target, media_type=local_library.MEDIA_TYPES.get(target.suffix.lower(), 'application/octet-stream'),
+                            filename=target.name, content_disposition_type='inline')
+
+    @router.get('/api/files/cover')
+    def local_cover(path: str):
+        target = resolve_library_file(path)
+        try:
+            picture = local_library.audio_cover(local_library.mutagen.File(target))
+        except (OSError, ValueError, local_library.mutagen.MutagenError):
+            picture = None
+        if not picture:
+            raise HTTPException(404, '文件没有封面')
+        data, mime = picture
+        if mime not in {'image/jpeg', 'image/png', 'image/webp'}:
+            raise HTTPException(415, '不支持该封面格式')
+        return Response(data, media_type=mime)
+
+    @router.patch('/api/files/tags')
+    def edit_file_tags(path: str, body: FileTagsBody):
+        target = resolve_library_file(path)
+        if target.suffix.lower() not in local_library.AUDIO_EXTENSIONS:
+            raise HTTPException(400, '请选择音频文件')
+        try:
+            local_library.update_metadata(target, body.title.strip(), body.artist.strip(), body.album.strip())
+        except (ValueError, local_library.mutagen.MutagenError) as error:
+            raise HTTPException(400, f'无法编辑标签：{error}')
+        except OSError:
+            raise HTTPException(409, '文件正在使用或没有写入权限，请停止播放或关闭占用程序后重试')
+        result = library_file(path)
+        for kind in ('favorite', 'playlist'):
+            if kind == 'favorite' and get(kind, result['track']['id']):
+                put(kind, result['track']['id'], result['track'])
+            elif kind == 'playlist':
+                saved = get(kind, 'main', [])
+                if any(isinstance(t, dict) and t.get('id') == result['track']['id'] for t in saved):
+                    put(kind, 'main', [result['track'] if t['id'] == result['track']['id'] else t for t in saved])
+        return result
 
     @router.get('/api/files/content')
     def file_content(path: str):
@@ -796,6 +883,12 @@ def install(old, root):
                 if job.get('file') == file_token(target):
                     job.update(file=None, detail='音乐文件已从音乐库删除')
                     put('download', job['id'], job)
+        local_id = 'local-' + hashlib.sha256(file_token(target).encode()).hexdigest()[:24]
+        remove('track', local_id)
+        remove('favorite', local_id)
+        saved = get('playlist', 'main', [])
+        if any(isinstance(t, dict) and t.get('id') == local_id for t in saved):
+            put('playlist', 'main', [t for t in saved if not isinstance(t, dict) or t.get('id') != local_id])
         old.pushlog('info', f'已删除音乐文件：{target.name}', category='download')
         return {'deleted': True}
 

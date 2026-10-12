@@ -163,9 +163,34 @@ try {
     playlist = [],
     jobs = [],
     savedPlaylists = [];
+  let localTrack = {
+    ...track,
+    id: "local-fixture",
+    source: "local",
+    title: "本地测试音乐",
+    artist: "本地歌手",
+    album: "本地专辑",
+    cover: null,
+    qualities: [],
+    playback: { ...track.playback, url: "/api/files/audio?path=fixture-a.wav" },
+  };
   let libraryFiles = [
-    { path: "fixture-a.wav", name: "测试音乐.wav", size: 1024 },
-    { path: "fixture-b.lrc", name: "测试歌词.lrc", size: 128 },
+    {
+      path: "fixture-a.wav",
+      name: "测试音乐.wav",
+      size: 1024,
+      root: "/music",
+      folder: "通勤",
+      track: localTrack,
+      editable: true,
+    },
+    {
+      path: "fixture-b.lrc",
+      name: "测试歌词.lrc",
+      size: 128,
+      root: "/music",
+      folder: "通勤",
+    },
   ];
   const wav = Buffer.alloc(44 + 8000 * 2 * 8);
   wav.write("RIFF");
@@ -204,7 +229,9 @@ try {
       result = { saved: true };
     } else if (p === "/playlist") {
       if (method === "PUT")
-        playlist = request.postDataJSON().length ? [track] : [];
+        playlist = request
+          .postDataJSON()
+          .map((id) => (id === localTrack.id ? localTrack : track));
       result = method === "PUT" ? { saved: true } : playlist;
     } else if (p === "/playlist/import") {
       const input = request.postDataJSON();
@@ -304,10 +331,16 @@ try {
       result = {
         text: "[00:00.00]测试歌词第一句\n[00:02.00]测试歌词第二句\n[00:05.00]测试歌词第三句",
       };
-    else if (p.endsWith("/playback") || p.endsWith("/versions")) result = track;
-    else if (p.startsWith("/stream/")) {
+    else if (p.endsWith("/playback") || p.endsWith("/versions"))
+      result = p.includes("local-fixture") ? localTrack : track;
+    else if (p.startsWith("/stream/") || p === "/files/audio") {
       await route.fulfill({ status: 200, contentType: "audio/wav", body: wav });
       return;
+    } else if (p === "/files/tags") {
+      const tags = request.postDataJSON();
+      localTrack = { ...localTrack, ...tags };
+      libraryFiles[0] = { ...libraryFiles[0], track: localTrack };
+      result = libraryFiles[0];
     } else if (p === "/files") {
       if (method === "DELETE") {
         const path = new URL(request.url()).searchParams.get("path");
@@ -518,11 +551,37 @@ try {
   await page.getByRole("button", { name: "确认操作", exact: true }).click();
   await expect(page.locator(".download-row")).toHaveCount(0);
   await page.getByRole("button", { name: "音乐文件", exact: true }).click();
-  await expect(page.locator(".file-list > div")).toHaveCount(2);
+  await expect(page.locator(".music-table tbody tr")).toHaveCount(1);
+  await expect(page.getByText("本地测试音乐", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "通勤", exact: true }).click();
+  await page.getByLabel("播放本地歌曲 本地测试音乐", { exact: true }).click();
+  await page.waitForFunction(
+    () => document.querySelector("audio").currentTime > 0.05,
+  );
+  assert.ok(
+    await page
+      .locator("audio")
+      .evaluate((audio) => audio.src.includes("/files/audio")),
+  );
+  await page.getByLabel("编辑歌曲 本地测试音乐", { exact: true }).click();
+  await page.getByLabel("歌曲标题", { exact: true }).fill("修改后的本地歌曲");
+  await page.getByRole("button", { name: "保存歌曲信息", exact: true }).click();
+  await expect(page.locator(".music-table")).toContainText("修改后的本地歌曲");
+  await page.getByRole("button", { name: "播放全部", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector("audio").paused);
+  assert.equal(playlist[0].id, "local-fixture");
   await page.getByLabel("搜索音乐文件").fill("音乐");
-  await expect(page.locator(".file-list > div")).toHaveCount(1);
+  await expect(page.locator(".music-table tbody tr")).toHaveCount(1);
   await page.getByLabel("全选音乐文件").check();
   await page.screenshot({ path: "../output/test-ui-file-management.png" });
+  const localDuration = await page
+    .locator(".music-table tbody .library-duration")
+    .boundingBox();
+  const localActions = await page.locator(".library-actions").boundingBox();
+  assert.ok(
+    localDuration.x + localDuration.width <= localActions.x,
+    "local song actions do not overlap duration",
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(
     await page.evaluate(
@@ -539,10 +598,13 @@ try {
   assert.equal(libraryFiles.length, 2);
   await page.getByRole("button", { name: "删除选中文件", exact: true }).click();
   await page.getByRole("button", { name: "确认操作", exact: true }).click();
-  await expect(page.locator(".file-list > div")).toHaveCount(0);
+  await expect(page.locator(".music-table tbody tr")).toHaveCount(0);
   await page.getByLabel("搜索音乐文件").fill("");
-  await expect(page.locator(".file-list > div")).toHaveCount(1);
+  await page.getByRole("button", { name: "附属文件", exact: true }).click();
+  await expect(page.locator(".music-table tbody tr")).toHaveCount(1);
   await page.getByRole("button", { name: "搜索音乐", exact: true }).click();
+  await page.getByLabel("播放 测试曲目", { exact: true }).click();
+  await page.getByLabel("加入播放列表 测试曲目", { exact: true }).click();
   if (await page.getByLabel("关闭提示", { exact: true }).count())
     await page.getByLabel("关闭提示", { exact: true }).click();
   await page.screenshot({ path: "../output/test-ui-search.png" });

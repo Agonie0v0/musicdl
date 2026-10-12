@@ -139,6 +139,72 @@ def test_library_deletion_checks_paths_and_clears_download_link():
     lyrics.unlink()
 
 
+def test_local_song_library_plays_and_edits_real_audio_tags():
+    from mutagen.wave import WAVE
+    from mutagen.id3 import TIT2, TPE1, TALB, TXXX, APIC
+    client = TestClient(app.app)
+    folder = app.original.FILE_ROOT / 'library-fixture'
+    folder.mkdir(parents=True, exist_ok=True)
+    audio = folder / 'song.wav'
+    with wave.open(str(audio), 'wb') as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(8000)
+        writer.writeframes(b'\0\0' * 8000)
+    native = WAVE(audio)
+    native.add_tags()
+    for frame in (TIT2(encoding=3, text=['本地歌曲']), TPE1(encoding=3, text=['本地歌手']),
+                  TALB(encoding=3, text=['本地专辑']), TXXX(encoding=3, desc='keep', text=['unchanged']),
+                  APIC(encoding=3, mime='image/png', type=3, data=b'png-fixture')):
+        native.tags.add(frame)
+    native.save()
+    lyrics = audio.with_suffix('.lrc')
+    lyrics.write_text('[00:00.00]本地歌词', encoding='utf-8')
+    file = next(f for f in client.get('/api/files').json() if f['name'] == 'song.wav')
+    track = file['track']
+    assert file['folder'] == 'library-fixture' and file['editable']
+    assert (track['title'], track['artist'], track['album']) == ('本地歌曲', '本地歌手', '本地专辑')
+    assert track['duration'] == 1 and track['source'] == 'local'
+    assert client.post(f'/api/tracks/{track["id"]}/playback', headers=HEADERS).json()['playback']['url'] == track['playback']['url']
+    streamed = client.get(track['playback']['url'], headers={'Range': 'bytes=0-19'})
+    assert streamed.status_code == 206 and len(streamed.content) == 20
+    assert streamed.headers['content-type'] == 'audio/wav'
+    assert client.get(track['cover']).content == b'png-fixture'
+    assert client.get(f'/api/tracks/{track["id"]}/lyrics').json()['text'] == '[00:00.00]本地歌词'
+    client.put('/api/playlist', json=[track['id']], headers=HEADERS)
+    client.put(f'/api/favorites/{track["id"]}', headers=HEADERS)
+    updated = client.patch('/api/files/tags', params={'path': file['path']}, headers=HEADERS,
+                           json={'title': '新标题', 'artist': '新歌手', 'album': '新专辑'})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['track']['title'] == '新标题'
+    assert client.get('/api/playlist').json()[0]['title'] == '新标题'
+    native = WAVE(audio)
+    assert native.tags['TXXX:keep'].text == ['unchanged'] and native.tags.getall('APIC')[0].data == b'png-fixture'
+    with wave.open(str(audio), 'rb') as reader:
+        assert reader.readframes(8000) == b'\0\0' * 8000
+    assert not list(folder.glob('.musicdl-tags-*'))
+    client.delete('/api/files', params={'path': file['path']}, headers=HEADERS)
+    assert not any(t['id'] == track['id'] for t in client.get('/api/playlist').json())
+    assert not any(t['id'] == track['id'] for t in client.get('/api/favorites').json())
+    lyrics.unlink()
+
+
+def test_tag_edit_failure_keeps_file_and_checks_library_boundary():
+    client = TestClient(app.app)
+    target = app.original.FILE_ROOT / 'invalid-tag-audio.wav'
+    target.write_bytes(b'not-audio')
+    token = json.dumps([str(app.original.FILE_ROOT), target.name])
+    tags = {'title': 'new', 'artist': '', 'album': ''}
+    result = client.patch('/api/files/tags', params={'path': token}, headers=HEADERS, json=tags)
+    assert result.status_code == 400
+    assert target.read_bytes() == b'not-audio'
+    assert not list(target.parent.glob('.musicdl-tags-*'))
+    outside = json.dumps([str(app.original.FILE_ROOT), '../outside.wav'])
+    assert client.patch('/api/files/tags', params={'path': outside}, headers=HEADERS, json=tags).status_code == 403
+    assert client.get('/api/files/audio', params={'path': outside}).status_code == 403
+    target.unlink()
+
+
 def test_fully_unresolved_import_retains_missing_song_report(monkeypatch):
     future = Future()
     future.set_result({'songs': [], 'issues': [{'title': '不可用', 'source_id': '42', 'artist': '', 'reason': '资源不可用'}]})

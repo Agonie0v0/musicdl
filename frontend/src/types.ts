@@ -63,6 +63,10 @@ export interface LibraryFile {
   path: string;
   name: string;
   size: number;
+  root?: string;
+  folder?: string;
+  track?: Track;
+  editable?: boolean;
 }
 export interface SourceStatus {
   state: string;

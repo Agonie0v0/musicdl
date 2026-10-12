@@ -1,6 +1,7 @@
 import { Cover, Button, Lyrics, Modal } from "./components";
 import { EngineSettings } from "./EngineSettings";
 import { RuntimeLogs } from "./RuntimeLogs";
+import { MusicLibrary } from "./MusicLibrary";
 import { PlaylistLibrary } from "./PlaylistLibrary";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -130,7 +131,6 @@ export function App() {
     [importName, setImportName] = useState("");
   const [selectedJobs, setSelectedJobs] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [fileQuery, setFileQuery] = useState("");
   const [managing, setManaging] = useState(false);
   const [managementError, setManagementError] = useState("");
   const [confirmation, setConfirmation] = useState<{
@@ -389,12 +389,19 @@ export function App() {
         m4a: "audio/mp4",
         ogg: "audio/ogg",
         wav: "audio/wav",
+        opus: "audio/ogg;codecs=opus",
+        aac: "audio/aac",
+        mp4: "audio/mp4",
       };
       if (
         prepared.playback.codec &&
         !element.canPlayType(mediaType[prepared.playback.codec] || "")
       )
-        throw new Error("浏览器不支持该试听格式，请选择其他音源");
+        throw new Error(
+          prepared.source === "local"
+            ? "浏览器不支持该音频格式，可以下载到本机后播放"
+            : "浏览器不支持该试听格式，请选择其他音源",
+        );
       element.src = prepared.playback.url;
       element.load();
       await element.play();
@@ -424,7 +431,12 @@ export function App() {
     } else audio.current?.pause();
   }
   function step(direction: number) {
-    const list = playlist.length ? playlist : tracks;
+    const local = files.flatMap((file) => (file.track ? [file.track] : []));
+    const list = playlist.some((track) => track.id === current?.id)
+      ? playlist
+      : current?.source === "local"
+        ? local
+        : tracks;
     if (!list.length) return;
     const index = list.findIndex((t) => t.id === current?.id);
     let next = shuffle
@@ -482,6 +494,10 @@ export function App() {
     }
   }
   async function chooseDownload(items: Track[]) {
+    if (items.some((track) => track.source === "local")) {
+      setNotice("歌曲已在音乐库中，可在音乐文件页下载到本机");
+      return;
+    }
     if (!items.length) {
       setNotice("请先选择曲目");
       return;
@@ -634,12 +650,6 @@ export function App() {
     cancelled: "已取消",
   };
   const chosenJobs = jobs.filter((job) => selectedJobs.includes(job.id));
-  const visibleFiles = files.filter((file) =>
-    file.name.toLowerCase().includes(fileQuery.trim().toLowerCase()),
-  );
-  const chosenFiles = visibleFiles.filter((file) =>
-    selectedFiles.includes(file.path),
-  );
   const stopped = (job: DownloadJob) =>
     ["complete", "failed", "paused", "cancelled"].includes(job.status);
   async function manageJobs(action: string, targets: DownloadJob[]) {
@@ -691,6 +701,22 @@ export function App() {
         try {
           for (const file of targets) {
             await api(`/files?path=${encodeURIComponent(file.path)}`, "DELETE");
+            if (file.track) {
+              setPlaylist((previous) =>
+                previous.filter((track) => track.id !== file.track!.id),
+              );
+              setFavorites((previous) =>
+                previous.filter((track) => track.id !== file.track!.id),
+              );
+              if (current?.id === file.track.id) {
+                ++playGeneration.current;
+                audio.current?.pause();
+                audio.current?.removeAttribute("src");
+                audio.current?.load();
+                setCurrent(null);
+                setLoadingPlay(false);
+              }
+            }
             setSelectedFiles((previous) =>
               previous.filter((path) => path !== file.path),
             );
@@ -2012,119 +2038,58 @@ export function App() {
             </section>
           )}
           {view === "files" && (
-            <section className="view">
-              <div className="queue-toolbar">
-                <span>{files.length} 个文件</span>
-                <button
-                  className="secondary"
-                  onClick={() =>
-                    void api<LibraryFile[]>("/files").then(setFiles).catch(fail)
+            <MusicLibrary
+              files={files}
+              selected={selectedFiles}
+              setSelected={setSelectedFiles}
+              current={current}
+              busy={managing}
+              error={managementError}
+              refresh={() =>
+                void api<LibraryFile[]>("/files").then(setFiles).catch(fail)
+              }
+              play={(track) => void play(track)}
+              playAll={(items) =>
+                void (async () => {
+                  try {
+                    await api(
+                      "/playlist",
+                      "PUT",
+                      items.map((track) => track.id),
+                    );
+                    setPlaylist(items);
+                    await play(items[0]);
+                  } catch (error) {
+                    fail(error);
                   }
-                >
-                  刷新音乐库
-                </button>
-              </div>
-              <p className="management-help">
-                文件已保存在音乐库目录。“下载到本机”会通过浏览器再下载一份，适用于服务器或
-                Docker 部署。
-              </p>
-              <div className="management-toolbar">
-                <input
-                  className="management-search"
-                  aria-label="搜索音乐文件"
-                  placeholder="搜索文件名"
-                  value={fileQuery}
-                  onChange={(e) => setFileQuery(e.target.value)}
-                />
-                <label className="check-label">
-                  <input
-                    type="checkbox"
-                    aria-label="全选音乐文件"
-                    disabled={managing || !visibleFiles.length}
-                    checked={
-                      visibleFiles.length > 0 &&
-                      chosenFiles.length === visibleFiles.length
-                    }
-                    onChange={(e) =>
-                      setSelectedFiles(
-                        e.target.checked
-                          ? visibleFiles.map((file) => file.path)
-                          : [],
-                      )
-                    }
-                  />
-                  全选当前结果
-                </label>
-                <span>已选 {chosenFiles.length} 项</span>
-                <button
-                  className="secondary"
-                  disabled={managing || !chosenFiles.length}
-                  onClick={() => confirmFileDeletion(chosenFiles)}
-                >
-                  删除选中文件
-                </button>
-              </div>
-              <div className="file-list">
-                {visibleFiles.map((file) => (
-                  <div key={file.path}>
-                    <input
-                      type="checkbox"
-                      aria-label={`选择文件 ${file.name}`}
-                      checked={selectedFiles.includes(file.path)}
-                      disabled={managing}
-                      onChange={(e) =>
-                        setSelectedFiles(
-                          e.target.checked
-                            ? [...selectedFiles, file.path]
-                            : selectedFiles.filter(
-                                (path) => path !== file.path,
-                              ),
-                        )
-                      }
-                    />
-                    <span>
-                      <strong>{file.name}</strong>
-                      <small>
-                        {(() => {
-                          try {
-                            const token = JSON.parse(file.path);
-                            return Array.isArray(token) ? token[1] : file.path;
-                          } catch {
-                            return file.path;
-                          }
-                        })()}
-                      </small>
-                    </span>
-                    <span>{bytes(file.size)}</span>
-                    <a
-                      className="secondary"
-                      download
-                      href={`/api/files/content?path=${encodeURIComponent(file.path)}`}
-                    >
-                      下载到本机
-                    </a>
-                    <Button
-                      label={`删除文件 ${file.name}`}
-                      disabled={managing}
-                      onClick={() => confirmFileDeletion([file])}
-                    >
-                      <Trash2 />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-              {managementError && <p role="alert">{managementError}</p>}
-              {!files.length && (
-                <div className="empty">
-                  音乐库为空。完成下载后，文件会显示在这里。
-                </div>
-              )}
-              {!!files.length && !visibleFiles.length && (
-                <div className="empty">
-                  没有匹配的音乐文件，请尝试其他文件名。
-                </div>
-              )}
-            </section>
+                })()
+              }
+              queue={(items) => void addToPlaylist(items)}
+              remove={confirmFileDeletion}
+              changed={(file) => {
+                setFiles((previous) =>
+                  previous.map((item) =>
+                    item.path === file.path ? file : item,
+                  ),
+                );
+                if (file.track) {
+                  const updated = file.track;
+                  setPlaylist((previous) =>
+                    previous.map((track) =>
+                      track.id === updated.id ? updated : track,
+                    ),
+                  );
+                  setFavorites((previous) =>
+                    previous.map((track) =>
+                      track.id === updated.id ? updated : track,
+                    ),
+                  );
+                  setCurrent((previous) =>
+                    previous?.id === updated.id ? updated : previous,
+                  );
+                }
+              }}
+            />
           )}
           {view === "settings" && config && (
             <section className="view">
