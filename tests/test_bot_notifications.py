@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from bot_notifications import DownloadLinks, WecomCrypt, install
 from bot_notifications import BotService
-from bot_notifications import format_size, track_size, job_progress, TG_COMMANDS
+from bot_notifications import format_size, track_size, job_progress, rank_tracks, TG_COMMANDS
 
 
 class Store:
@@ -169,8 +169,9 @@ def test_menu_commands_and_task_progress(setup_bot):
 def test_channel_text_limits_and_wecom_pagination(setup_bot):
     _, bot, store, _, track = setup_bot
     message = {'id': 'b' * 64, 'channel': 'wecom', 'user': 'member'}
-    bot.search_page(message, 'aaaaaaaa', {'tracks': [track] * 10}, 2)
-    assert '翻页：结果 aaaaaaaa 1' in store.values('bot_outbox')[-1]['text']
+    bot.search_page(message, 'aaaaaaaa', {'tracks': [track] * 10, 'expires': time.time() + 1800}, 2)
+    assert '下一页 / 上一页 / 第2页' in store.values('bot_outbox')[-1]['text']
+    assert 'aaaaaaaa' not in store.values('bot_outbox')[-1]['text']
     text = '中🎵' * 2000
     for channel, limit, encoding, divisor in [('wecom', 1800, 'utf-8', 1), ('tg', 4000, 'utf-16-le', 2)]:
         before = len(store.values('bot_outbox'))
@@ -188,6 +189,72 @@ def test_telegram_unchanged_edit_is_success(setup_bot):
     assert bot.telegram('editMessageText', {}) is True
     with pytest.raises(RuntimeError):
         bot.telegram('sendMessage', {})
+
+
+def test_ranking_prioritizes_relevant_lossless_before_cap(setup_bot):
+    _, bot, store, _, track = setup_bot
+    lossy = {'id': 'mp3', 'codec': 'mp3', 'label': 'MP3', 'bitrate': 320}
+    lossless = {'id': 'flac', 'codec': 'flac', 'label': 'FLAC 无损', 'lossless': True}
+    song = {**track, 'title': '稻香', 'artist': '周杰伦'}
+    mp3 = {**song, 'id': 'exact-mp3', 'qualities': [lossy]}
+    flac = {**song, 'id': 'exact-flac', 'qualities': [lossy, lossless]}
+    remix = {**song, 'id': 'remix', 'title': '稻香 Remix', 'qualities': [lossless]}
+    unrelated = {**track, 'id': 'unrelated', 'title': '其他歌曲', 'artist': '其他歌手', 'qualities': [lossless]}
+    ordered = rank_tracks([unrelated, remix, mp3, flac], '稻香 周杰伦')
+    assert [t['id'] for t in ordered] == ['exact-flac', 'exact-mp3', 'remix', 'unrelated']
+    assert ordered[0]['qualities'][0]['id'] == 'flac'
+    assert flac['qualities'][0]['id'] == 'mp3'  # native track remains untouched
+    bot.search = AsyncMock(return_value=([unrelated] * 15 + [flac], False))
+    asyncio.run(bot.command({'id': 'a' * 64, 'channel': 'tg', 'user': '123', 'text': '稻香 周杰伦'}))
+    assert store.get('bot_search', 'tg:123:aaaaaaaa')['tracks'][0]['id'] == 'exact-flac'
+
+
+def test_short_pagination_and_download_use_owned_latest_session(setup_bot):
+    _, bot, store, _, track = setup_bot
+    bot.search = AsyncMock(return_value=([{**track, 'id': str(i)} for i in range(10)], False))
+    async def scenario():
+        message = {'id': 'a' * 64, 'channel': 'wecom', 'user': 'alice', 'text': '搜索 测试音乐'}
+        await bot.command(message)
+        await bot.command({**message, 'text': '下一页'})
+        assert '第 2/2 页' in store.values('bot_outbox')[-1]['text']
+        await bot.command({**message, 'text': '下一页'})
+        assert '最后一页' in store.values('bot_outbox')[-1]['text']
+        await bot.command({**message, 'text': '上一页'})
+        assert '第 1/2 页' in store.values('bot_outbox')[-1]['text']
+        for command in ('第2页', '结果 2', '翻页 2', '/results 2'):
+            await bot.command({**message, 'text': command})
+            assert store.get('bot_session', 'wecom:alice')['page'] == 2
+        with pytest.raises(HTTPException):
+            await bot.command({**message, 'user': 'bob', 'text': '下一页'})
+        await bot.command({**message, 'id': 'b' * 64, 'text': '下载 6'})
+        assert bot.enqueue.call_args.args[0]['id'] == '5'
+        assert not bot.control.called
+        # A new search replaces the short-command context without reusing old results.
+        await bot.command({**message, 'id': 'c' * 64, 'text': '搜索 新歌'})
+        assert store.get('bot_session', 'wecom:alice')['search_id'] == 'cccccccc'
+        bot.enqueue.assert_called_once()
+        result = store.get('bot_search', 'wecom:alice:cccccccc')
+        result['expires'] = 0
+        store.put('bot_search', result['id'], result)
+        with pytest.raises(HTTPException):
+            await bot.command({**message, 'text': '下载 1'})
+    asyncio.run(scenario())
+
+
+def test_wecom_empty_allowlist_accepts_all_authenticated_members(setup_bot):
+    app, bot, store, _, _ = setup_bot
+    client = TestClient(app)
+    draft = {'wecom_enabled': True, 'wecom_corp_id': 'corp123', 'wecom_agent_id': '100001',
+             'wecom_secret': 'secret', 'wecom_token': 'token', 'wecom_aes_key': base64.b64encode(b'k' * 32).decode().rstrip('='),
+             'wecom_allowed_users': ''}
+    assert client.put('/api/bots/config', json=draft).status_code == 200
+    current = app.state.bots
+    assert current.allowed('wecom', 'alice') and current.allowed('wecom', 'bob')
+    assert not current.allowed('wecom', '')
+    assert not current.allowed('tg', '999')
+    current.wecom_users = {'alice'}
+    assert current.allowed('wecom', 'alice') and not current.allowed('wecom', 'bob')
+    assert client.put('/api/bots/config', json={'tg_allowed_users': ''}).status_code == 400
 
 
 def test_signed_file_stream_range_head_and_tampering(setup_bot, monkeypatch):

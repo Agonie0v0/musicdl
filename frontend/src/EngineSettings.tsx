@@ -90,7 +90,13 @@ export function EngineSettings({
   sources,
   saved,
 }: {
-  sources: { id: string; label: string; engine_name?: string }[];
+  sources: {
+    id: string;
+    label: string;
+    engine_name?: string;
+    proxy_recommended?: boolean;
+    init_error?: string | null;
+  }[];
   saved: () => Promise<void>;
 }) {
   const [config, setConfig] = useState<EngineConfig | null>(null);
@@ -226,10 +232,19 @@ export function EngineSettings({
           };
           for (const [key, label] of advancedFields)
             payload[key] = parseObject(drafts[key], label);
-          await api("/engine/config", "PUT", payload);
+          const result = await api<{ source_errors?: Record<string, string> }>(
+            "/engine/config",
+            "PUT",
+            payload,
+          );
           hydrate(await api<EngineConfig>("/engine/config"));
           await saved();
-          setMessage("全部设置已保存并生效");
+          const unavailable = Object.entries(result.source_errors || {});
+          setMessage(
+            unavailable.length
+              ? `设置已保存，${unavailable.length} 个音源暂不可用，其他音源已生效。${unavailable.map(([name, hint]) => `${sources.find((s) => (s.engine_name || aliases[s.id] || s.id) === name)?.label || name}：${hint}`).join("；")}`
+              : "全部设置已保存并生效",
+          );
         } catch (e) {
           setAdvancedOpen(true);
           setError((e as Error).message);
@@ -373,30 +388,63 @@ export function EngineSettings({
           </label>
         </div>
         {config.proxy_scope === "selected" && (
-          <fieldset className="source-picker">
-            <legend>使用全局代理的音源</legend>
-            {sources.map((source) => {
-              const name =
-                source.engine_name || aliases[source.id] || source.id;
-              return (
-                <label className="check-label" key={source.id}>
-                  <input
-                    type="checkbox"
-                    checked={config.proxy_sources.includes(name)}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        proxy_sources: e.target.checked
-                          ? [...config.proxy_sources, name]
-                          : config.proxy_sources.filter((v) => v !== name),
-                      })
-                    }
-                  />
-                  {source.label}
-                </label>
-              );
-            })}
-          </fieldset>
+          <>
+            <p>
+              推荐适用于中国大陆部署：优先为海外平台和海外聚合站使用代理，国内音源保持直连。实际可访问性取决于部署网络，可继续手动调整。
+            </p>
+            <div className="source-picker-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() =>
+                  setConfig({
+                    ...config,
+                    proxy_sources: sources
+                      .filter((source) => source.proxy_recommended)
+                      .map(
+                        (source) =>
+                          source.engine_name || aliases[source.id] || source.id,
+                      ),
+                  })
+                }
+              >
+                选择推荐音源
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setConfig({ ...config, proxy_sources: [] })}
+              >
+                清空代理选择
+              </button>
+              <span>{config.proxy_sources.length} 个音源使用全局代理</span>
+            </div>
+            <fieldset className="source-picker">
+              <legend>使用全局代理的音源</legend>
+              {sources.map((source) => {
+                const name =
+                  source.engine_name || aliases[source.id] || source.id;
+                return (
+                  <label className="check-label" key={source.id}>
+                    <input
+                      type="checkbox"
+                      checked={config.proxy_sources.includes(name)}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          proxy_sources: e.target.checked
+                            ? [...config.proxy_sources, name]
+                            : config.proxy_sources.filter((v) => v !== name),
+                        })
+                      }
+                    />
+                    {source.label}
+                    {source.proxy_recommended && <small>推荐代理</small>}
+                  </label>
+                );
+              })}
+            </fieldset>
+          </>
         )}
       </section>
       <section className="settings-section settings-behavior">
@@ -445,7 +493,7 @@ export function EngineSettings({
           >
             取消全选
           </button>
-          <span>{config.music_sources.length} 个音源参与搜索</span>
+          <span>{config.music_sources.length} 个音源已选择</span>
         </div>
         <div className="source-settings-grid">
           {sources.map((source) => {
@@ -476,6 +524,11 @@ export function EngineSettings({
                     />
                   </label>
                 </summary>
+                {source.init_error && (
+                  <p className="setting-help" role="status">
+                    暂不可用：{source.init_error}。补全配置后再次保存。
+                  </p>
+                )}
                 <label>
                   Cookie
                   <textarea

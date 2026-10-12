@@ -322,6 +322,42 @@ def fixture_song():
                     work_dir=str(_root / 'music' / 'MiguMusicClient'))
 
 
+def test_all_sources_save_with_missing_parser_isolated_and_proxy_recommendations():
+    client = TestClient(app.app)
+    manager = app.original.manager
+    original, old_errors = copy.deepcopy(manager.config), manager.source_errors.copy()
+    try:
+        cfg = client.get('/api/engine/config').json()
+        cfg['music_sources'] = list(app.original.MusicClientBuilder.REGISTERED_MODULES)
+        cfg['init_music_clients_cfg'].pop('XiagebaMusicClient', None)
+        cfg['global_client_cfg'].pop('quark_parser_config', None)
+        response = client.put('/api/engine/config', json=cfg, headers=HEADERS)
+        assert response.status_code == 200, response.text
+        assert 'quark_parser_config.cookies' in response.json()['source_errors']['XiagebaMusicClient']
+        assert client.get('/api/engine/config').json()['music_sources'] == cfg['music_sources']
+        native = manager.get()
+        assert 'MiguMusicClient' in native.music_clients and 'KuwoMusicClient' in native.music_clients
+        assert 'XiagebaMusicClient' not in native.music_clients
+        assert set(native.music_sources) == set(native.music_clients)
+        sources = {s['engine_name']: s for s in client.get('/api/config').json()['available_sources']}
+        assert sources['XiagebaMusicClient']['init_error']
+        assert sources['YouTubeMusicClient']['proxy_recommended']
+        assert sources['SpotifyMusicClient']['proxy_recommended']
+        assert not sources['KuwoMusicClient']['proxy_recommended']
+        assert not sources['NeteaseMusicClient']['proxy_recommended']
+        # Native per-source threading/overrides still match after combining clients.
+        assert native.clients_threadings['MiguMusicClient'] == cfg['clients_threadings'].get('MiguMusicClient', cfg['default_threads'])
+        # An entirely unusable selection is still rejected atomically.
+        failed = {**cfg, 'music_sources': ['XiagebaMusicClient']}
+        rejected = client.put('/api/engine/config', json=failed, headers=HEADERS)
+        assert rejected.status_code == 400
+        assert manager.client is native
+        assert manager.config['music_sources'] == cfg['music_sources']
+        assert manager.source_errors == response.json()['source_errors']
+    finally:
+        manager.config, manager.client, manager.source_errors = original, None, old_errors
+
+
 def test_full_settings_save_preserves_all_original_fields_and_timeout_zero():
     client = TestClient(app.app)
     original = copy.deepcopy(app.original.manager.config)

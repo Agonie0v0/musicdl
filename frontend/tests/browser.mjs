@@ -90,6 +90,8 @@ try {
       { id: "kuwo", label: "酷我" },
       { id: "qianqian", label: "千千" },
       { id: "GDStudioMusicClient", label: "GDStudio" },
+      { id: "YouTubeMusicClient", label: "YouTube", proxy_recommended: true },
+      { id: "SpotifyMusicClient", label: "Spotify", proxy_recommended: true },
     ],
     sources: ["netease", "migu", "qq", "kuwo", "qianqian"],
     results_per_source: 3,
@@ -139,6 +141,7 @@ try {
     search_rules: { MiguMusicClient: { quality: "keep" } },
   };
   let engineSaves = 0;
+  let engineSourceErrors = {};
   let logFetches = 0;
   const logEntries = [
     {
@@ -279,7 +282,10 @@ try {
         engineConfig = request.postDataJSON();
         engineSaves++;
       }
-      result = method === "PUT" ? { saved: true } : engineConfig;
+      result =
+        method === "PUT"
+          ? { saved: true, source_errors: engineSourceErrors }
+          : engineConfig;
     } else if (p === "/favorites") result = favorites;
     else if (p.startsWith("/favorites/")) {
       favorites = method === "PUT" ? [track] : [];
@@ -793,7 +799,7 @@ try {
   await page.getByRole("dialog").getByLabel("关闭", { exact: true }).click();
   await page.getByRole("button", { name: "音源与设置", exact: true }).click();
   await page.locator(".source-setting").first().waitFor();
-  assert.equal(await page.locator(".source-setting").count(), 6);
+  assert.equal(await page.locator(".source-setting").count(), 8);
   await expect(page.locator(".settings-advanced")).not.toHaveAttribute("open");
   await page.getByRole("button", { name: "取消全选", exact: true }).click();
   await expect(
@@ -802,7 +808,7 @@ try {
   await page.getByRole("button", { name: "全选", exact: true }).click();
   assert.equal(
     await page.locator(".source-setting input[type=checkbox]:checked").count(),
-    6,
+    8,
   );
   await page.getByLabel("启用 GDStudio", { exact: true }).uncheck();
   await page.locator(".settings-advanced > summary").click();
@@ -817,6 +823,17 @@ try {
   await page
     .getByLabel("代理作用范围", { exact: true })
     .selectOption("selected");
+  await page.getByRole("button", { name: "选择推荐音源", exact: true }).click();
+  await expect(
+    page.locator(".source-picker").getByLabel("YouTube", { exact: false }),
+  ).toBeChecked();
+  await expect(
+    page.locator(".source-picker").getByLabel("Spotify", { exact: false }),
+  ).toBeChecked();
+  await expect(
+    page.locator(".source-picker").getByLabel("网易云", { exact: true }),
+  ).not.toBeChecked();
+  await page.getByRole("button", { name: "清空代理选择", exact: true }).click();
   await page
     .locator(".source-picker")
     .getByLabel("GDStudio", { exact: true })
@@ -869,6 +886,19 @@ try {
   assert.deepEqual(engineConfig.requests_overrides.MiguMusicClient.headers, {
     "X-Custom": "keep",
   });
+  engineSourceErrors = { GDStudioMusicClient: "需要补全分源配置" };
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await expect(
+    page.locator(".settings-save").getByRole("status"),
+  ).toContainText("设置已保存，1 个音源暂不可用，其他音源已生效");
+  await expect(
+    page.locator(".settings-save").getByRole("status"),
+  ).toContainText("GDStudio：需要补全分源配置");
+  engineSourceErrors = {};
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await expect(
+    page.locator(".settings-save").getByRole("status"),
+  ).toContainText("全部设置已保存并生效");
   await page.locator(".settings-advanced > summary").click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => scrollTo(0, 0));

@@ -341,6 +341,7 @@ class ClientManager:
         self.config = loadconfig()
         self.client: MusicClient | None = None
         self.build_error: str | None = None
+        self.source_errors: dict[str, str] = {}
 
     '''build a MusicClient from current config'''
     def build(self):
@@ -371,11 +372,35 @@ class ClientManager:
                 overrides['timeout'] = timeout
             req_overrides[source] = overrides
             rules[source] = cfg['search_rules'].get(source, {})
-        client = MusicClient(music_sources=sources, init_music_clients_cfg=init_cfgs,
-                             clients_threadings=threadings, requests_overrides=req_overrides, search_rules=rules)
+        # One provider's missing account/parser settings must not disable all
+        # the other providers. Keep native MusicClient objects and merge only
+        # their source registries; every provider retains its native defaults.
+        client, errors = None, {}
+        for source in sources:
+            try:
+                part = MusicClient(music_sources=[source], init_music_clients_cfg={source: init_cfgs[source]},
+                                   clients_threadings={source: threadings[source]},
+                                   requests_overrides={source: req_overrides[source]}, search_rules={source: rules[source]})
+            except Exception as error:
+                parser = init_cfgs[source].get('quark_parser_config')
+                hint = ('需要配置夸克解析器 Cookie：分源客户端参数 quark_parser_config.cookies'
+                        if source == 'XiagebaMusicClient' and not (isinstance(parser, dict) and parser.get('cookies'))
+                        else f'初始化失败（{type(error).__name__}），请检查分源配置与运行日志')
+                errors[source] = hint
+                pushlog('warning', f'{source} 暂不可用：{hint}\n{error}')
+                continue
+            if client is None:
+                client = part
+            else:
+                client.music_sources.extend(part.music_sources)
+                for key in ('music_clients', 'work_dirs', 'clients_threadings', 'requests_overrides', 'search_rules'):
+                    getattr(client, key).update(getattr(part, key))
+        if client is None:
+            raise ValueError('所选音源均初始化失败，请检查音源配置与运行日志')
         self.client = client
+        self.source_errors = errors
         self.build_error = None
-        pushlog('info', f'已初始化 {len(sources)} 个音源: {", ".join(s.removesuffix("MusicClient") for s in sources)}')
+        pushlog('info', f'已初始化 {len(client.music_sources)} 个音源，{len(errors)} 个暂不可用: {", ".join(s.removesuffix("MusicClient") for s in client.music_sources)}')
 
     '''return a usable client, building lazily'''
     def get(self) -> MusicClient:
@@ -391,13 +416,14 @@ class ClientManager:
     '''apply a new config: persist + rebuild'''
     def applyconfig(self, cfg: dict):
         with self.lock:
-            old_config, old_client, old_error = self.config, self.client, self.build_error
+            old_config, old_client, old_error, old_source_errors = self.config, self.client, self.build_error, self.source_errors
             self.config = normalizeconfigpaths(cfg)
             try:
                 self.build()
                 saveconfig(self.config)
             except Exception:
                 self.config, self.client, self.build_error = old_config, old_client, old_error
+                self.source_errors = old_source_errors
                 raise
 
     '''all work dirs (for the file manager)'''

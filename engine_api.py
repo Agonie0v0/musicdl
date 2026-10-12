@@ -34,6 +34,13 @@ ALIASES = {'migu': 'MiguMusicClient', 'netease': 'NeteaseMusicClient', 'qq': 'QQ
 LABELS = {'migu': '咪咕', 'netease': '网易云', 'qq': 'QQ音乐', 'kuwo': '酷我', 'qianqian': '千千',
           'KugouMusicClient': '酷狗', 'BilibiliMusicClient': '哔哩哔哩', 'GequbaoMusicClient': '歌曲宝',
           'FangpiMusicClient': '放屁音乐网', 'XimalayaMusicClient': '喜马拉雅'}
+# A starting selection for deployments in mainland China, not a reachability
+# guarantee. Domestic platforms and Apple/iTunes remain direct by default.
+PROXY_RECOMMENDED = {'YouTubeMusicClient', 'SpotifyMusicClient', 'SoundCloudMusicClient',
+                     'DeezerMusicClient', 'QobuzMusicClient', 'TIDALMusicClient', 'JooxMusicClient',
+                     'JamendoMusicClient', 'FMAMusicClient', 'JioSaavnMusicClient', 'OpenGameArtMusicClient',
+                     'SunoMusicClient', 'AudiusMusicClient', 'WikimediaCommonsMusicClient',
+                     'CCMixterMusicClient', 'MP3JuiceMusicClient', 'MyFreeMP3MusicClient'}
 
 
 def source_id(name):
@@ -150,7 +157,9 @@ def install(old, root):
             proxy = override.get('proxies', {}).get('https', '')
             settings[source_id(name)] = {'cookie': cookie, 'proxy': proxy}
         return {'sources': [source_id(s) for s in cfg['music_sources'] if s in registered],
-                'available_sources': catalog, 'engine': f'musicdl {old.MUSICDL_VERSION}',
+                'available_sources': [{**source, 'proxy_recommended': source['engine_name'] in PROXY_RECOMMENDED,
+                                       'init_error': old.manager.source_errors.get(source['engine_name'])} for source in catalog],
+                'engine': f'musicdl {old.MUSICDL_VERSION}',
                 'results_per_source': cfg['global_client_cfg'].get('search_size_per_source', 5),
                 'search_timeout_seconds': cfg.get('request_timeout', 30),
                 'playback_timeout_seconds': cfg.get('request_timeout', 30),
@@ -333,7 +342,7 @@ def install(old, root):
             old.putconfig(old.ConfigBody(**body))
         except (ValueError, AssertionError) as error:
             raise HTTPException(400, str(error))
-        return {'saved': True}
+        return {'saved': True, 'source_errors': old.manager.source_errors}
 
     @router.put('/api/config')
     def write_config(body: dict):
@@ -371,7 +380,7 @@ def install(old, root):
             old.manager.applyconfig(cfg)
         except Exception as error:
             raise HTTPException(400, f'原音源配置初始化失败：{type(error).__name__}')
-        return {'saved': True, 'restart_required': False}
+        return {'saved': True, 'restart_required': False, 'source_errors': old.manager.source_errors}
 
     def emit(job, kind, value):
         job['events'].append((len(job['events']) + 1, kind, value))

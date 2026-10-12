@@ -10,6 +10,8 @@ import re
 import secrets
 import struct
 import time
+import unicodedata
+from difflib import SequenceMatcher
 import xml.etree.ElementTree as ET
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -23,9 +25,11 @@ HELP = ('musicdl · 功能菜单\n\n'
         '搜索音乐\n直接发送歌名或歌手，例如：稻香 周杰伦\n也可发送 /search 稻香 周杰伦\n\n'
         '试听与下载\n先打开网页试听，确认版本后点击结果下方的下载按钮。完成后收到原文件下载链接。\n\n'
         '我的任务\n/status 查看进度，并通过按钮继续、取消或获取下载链接。\n\n'
-        '/menu 随时打开功能菜单。仅支持白名单用户私聊。')
+        '翻页：下一页 / 上一页 / 第2页。下载：下载 1。\n\n'
+        '/menu 随时打开功能菜单。Telegram 仅支持白名单用户私聊；企业微信留空白名单时允许应用可见成员。')
 ALIASES = {'搜索': 'search', '下载': 'download', '状态': 'status', '取消': 'cancel',
-           '继续': 'resume', '链接': 'link', '帮助': 'help', '菜单': 'help', 'menu': 'help', 'start': 'help'}
+           '继续': 'resume', '链接': 'link', '帮助': 'help', '菜单': 'help', 'menu': 'help', 'start': 'help',
+           '下一页': 'next', '上一页': 'prev', 'next': 'next', 'prev': 'prev', '翻页': 'results'}
 TG_COMMANDS = [{'command': key, 'description': value} for key, value in (
     ('start', '打开功能菜单'), ('menu', '功能菜单'), ('search', '搜索音乐：/search 歌名 歌手'),
     ('status', '我的任务与下载进度'), ('download', '下载指定搜索结果'),
@@ -83,6 +87,35 @@ def job_progress(job):
     if job['status'] == 'complete':
         return '文件大小：' + format_size(downloaded)
     return f'已下载 {format_size(downloaded)} · 总大小未知'
+
+
+def quality_rank(quality):
+    codec = str(quality.get('codec') or '').lower()
+    lossless = bool(quality.get('lossless') or codec in {'flac', 'wav', 'alac', 'ape', 'wv', 'tta', 'dsf', 'dff'}
+                    or '无损' in quality.get('label', '') or ':flac:' in quality.get('id', ''))
+    bitrate = quality.get('bitrate')
+    return lossless, bitrate if valid_size(bitrate) else 0
+
+
+def rank_tracks(tracks, keyword):
+    def normalize(value):
+        return ''.join(c for c in unicodedata.normalize('NFKC', str(value)).casefold() if c.isalnum())
+    terms = [normalize(term) for term in keyword.split() if normalize(term)]
+    ranked = []
+    for track in tracks:
+        if track.get('episodes'):
+            continue
+        qualities = sorted(track.get('qualities') or [], key=quality_rank, reverse=True)
+        if not qualities:
+            continue
+        title, artist = normalize(track['title']), normalize(track.get('artist', ''))
+        matched = sum(term in title + artist for term in terms)
+        exact = any(title == term for term in terms)
+        similarity = max((SequenceMatcher(None, term, title).ratio() for term in terms), default=0)
+        lossless, bitrate = quality_rank(qualities[0])
+        ranked.append(((-matched, -exact, -lossless, -similarity, -bitrate), {**track, 'qualities': qualities}))
+    # Stable ties preserve provider order. Rank the full result before the cap.
+    return [track for _, track in sorted(ranked, key=lambda item: item[0])]
 
 
 def xml_fields(raw):
@@ -191,8 +224,8 @@ class BotService:
             if self.tg_token and any(not re.fullmatch(r'[1-9][0-9]*', u) for u in self.tg_users):
                 raise ValueError('MUSICDL_TG_ALLOWED_USERS 必须是数字用户 ID')
             if cfg['wecom_enabled']:
-                if not self.corp or not self.agent.isdigit() or not self.secret or not self.wecom_users:
-                    raise ValueError('企业微信需要 CorpID、AgentID、Secret 和用户白名单')
+                if not self.corp or not self.agent.isdigit() or not self.secret:
+                    raise ValueError('企业微信需要 CorpID、AgentID 和 Secret')
                 token = cfg['wecom_token'].strip()
                 if not token:
                     raise ValueError('请配置 MUSICDL_WECOM_TOKEN')
@@ -218,7 +251,9 @@ class BotService:
         self.seen_rate = {}
 
     def allowed(self, channel, user):
-        return bool(self.tg_token if channel == 'tg' else self.crypt) and user in (self.tg_users if channel == 'tg' else self.wecom_users)
+        if channel == 'tg':
+            return bool(self.tg_token) and user in self.tg_users
+        return channel == 'wecom' and bool(self.crypt) and bool(user) and (not self.wecom_users or user in self.wecom_users)
 
     def public_config(self):
         return {**{key: value for key, value in self.config.items() if key not in SECRET_FIELDS},
@@ -279,16 +314,15 @@ class BotService:
             raise HTTPException(400, '搜索页码无效')
         start = (page - 1) * 5
         visible = tracks[start:start + 5]
-        lines = [f'搜索结果 · 第 {page}/{pages} 页 · 共 {len(tracks)} 首',
-                 f'编号 {search_id} · 30 分钟内有效', '']
+        lines = [f'搜索结果 · 第 {page}/{pages} 页 · 共 {len(tracks)} 首', '相关结果优先，同等匹配优先无损', '']
         for index, track in enumerate(visible, start + 1):
             source = SOURCE_LABELS.get(track['source'], track['source'].removesuffix('MusicClient'))
             lines.extend([f'{index}. {concise(track["title"])}',
                           f'{concise(track["artist"], 24)} · {concise(source, 16)}',
                           f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}', ''])
-        lines.append('点击下方编号下载，试听请打开网页。' if message['channel'] == 'tg' else f'下载示例：下载 {search_id} {start + 1}')
+        lines.append('点击下方编号下载，试听请打开网页。' if message['channel'] == 'tg' else f'先打开网页试听确认版本。下载示例：下载 {start + 1}')
         if message['channel'] == 'wecom' and pages > 1:
-            lines.append(f'翻页：结果 {search_id} {2 if page == 1 else 1}')
+            lines.append('翻页：下一页 / 上一页 / 第2页（30 分钟内有效）')
         if result.get('partial'):
             lines.append('部分音源失败或超时，以上为已返回结果。')
         buttons = button_rows([{'text': f'下载 {index}', 'callback_data': f'/download {search_id} {index}'}
@@ -304,6 +338,15 @@ class BotService:
             buttons.append([{'text': '打开网页试听', 'url': self.links.base_url}])
         buttons.append([{'text': '功能菜单', 'callback_data': '/menu'}, {'text': '我的任务', 'callback_data': '/status'}])
         self.reply(message, '\n'.join(lines), buttons=buttons, edit_message_id=message.get('reply_message_id'))
+        owner = f'{message["channel"]}:{message["user"]}'
+        self.put('bot_session', owner, {'id': owner, 'search_id': search_id, 'page': page, 'expires': result['expires']})
+
+    def current_search(self, owner):
+        session = self.get('bot_session', owner)
+        result = self.get('bot_search', f'{owner}:{session["search_id"]}') if session else None
+        if not result or result['expires'] <= time.time():
+            raise HTTPException(400, '没有有效搜索结果，请先发送歌名重新搜索')
+        return session, result
 
     def accept(self, channel, user, message_id, text, reply_message_id=None):
         if not self.allowed(channel, user):
@@ -328,11 +371,13 @@ class BotService:
         text = message['text'].strip()
         command, _, arg = text.partition(' ')
         command = ALIASES.get(command.lstrip('/').split('@')[0].lower(), command.lstrip('/').lower())
+        if match := re.fullmatch(r'第\s*([0-9]+)\s*页', text):
+            command, arg = 'results', match[1]
         if command == '结果':
             command = 'results'
-        if text and not text.startswith('/') and command not in {'help', 'search', 'download', 'status', 'link', 'cancel', 'resume', 'results'}:
+        if text and not text.startswith('/') and command not in {'help', 'search', 'download', 'status', 'link', 'cancel', 'resume', 'results', 'next', 'prev'}:
             command, arg = 'search', text
-        command_label = command if command in {'help', 'search', 'download', 'status', 'link', 'cancel', 'resume', 'results'} else '未知命令'
+        command_label = command if command in {'help', 'search', 'download', 'status', 'link', 'cancel', 'resume', 'results', 'next', 'prev'} else '未知命令'
         self.log('info', f'{message["channel"]} 开始处理命令：{command_label}', category='bot', task_id=message['id'])
         owner = f'{message["channel"]}:{message["user"]}'
         if command == 'help':
@@ -346,7 +391,7 @@ class BotService:
             self.reply(message, '正在搜索，请稍候。')
             tracks, partial = await self.search(arg.strip(), self.sources)
             # Cap chat output; the full multi-source result remains in the web UI.
-            tracks = [t for t in tracks if not t.get('episodes')][:10]
+            tracks = rank_tracks(tracks, arg.strip())[:10]
             if not tracks:
                 self.reply(message, '没有可下载结果，请换关键词或检查音源设置。')
                 return
@@ -355,18 +400,31 @@ class BotService:
             self.put('bot_search', result['id'], result)
             # Search progress is a separate reply; only pagination edits a card.
             self.search_page({k: v for k, v in message.items() if k != 'reply_message_id'}, search_id, result)
-        elif command == 'results':
+        elif command in {'results', 'next', 'prev'}:
             args = arg.split()
-            if len(args) != 2 or not re.fullmatch(r'[a-f0-9]{8}', args[0]) or not args[1].isdigit():
-                raise HTTPException(400, '格式：结果 搜索编号 页码')
-            result = self.get('bot_search', f'{owner}:{args[0]}')
-            if not result or result['expires'] <= time.time():
-                raise HTTPException(400, '搜索结果已过期，请重新搜索')
-            self.search_page(message, args[0], result, int(args[1]))
+            if command in {'next', 'prev'} or (len(args) == 1 and args[0].isdigit()):
+                session, result = self.current_search(owner)
+                search_id = session['search_id']
+                page = session['page'] + (1 if command == 'next' else -1) if command in {'next', 'prev'} else int(args[0])
+                pages = (len(result['tracks']) + 4) // 5
+                if not 1 <= page <= pages:
+                    self.reply(message, '已经是最后一页。' if page > pages else '已经是第一页。')
+                    return
+            else:
+                if len(args) != 2 or not re.fullmatch(r'[a-f0-9]{8}', args[0]) or not args[1].isdigit():
+                    raise HTTPException(400, '发送 下一页 / 上一页 / 第2页')
+                search_id, page = args[0], int(args[1])
+                result = self.get('bot_search', f'{owner}:{search_id}')
+                if not result or result['expires'] <= time.time():
+                    raise HTTPException(400, '搜索结果已过期，请重新搜索')
+            self.search_page(message, search_id, result, page)
         elif command == 'download':
             args = arg.split()
+            if len(args) == 1 and args[0].isdigit():
+                session, _ = self.current_search(owner)
+                args.insert(0, session['search_id'])
             if len(args) != 2 or not re.fullmatch(r'[a-f0-9]{8}', args[0]) or not args[1].isdigit():
-                raise HTTPException(400, '格式：下载 搜索编号 序号')
+                raise HTTPException(400, '发送 下载 序号，例如：下载 1；请先搜索音乐')
             result = self.get('bot_search', f'{owner}:{args[0]}')
             index = int(args[1]) - 1
             if not result or result['expires'] <= time.time() or not 0 <= index < len(result['tracks']):
@@ -584,7 +642,7 @@ class BotService:
                         self.log('warning', f'{item["channel"]} 通知发送失败，第 {item["attempts"]} 次，将于 {retry_at} 重试：{self.error_detail(error)}', category='bot', task_id=item.get('job_id') or item['id'])
                 # Keep replay protection for seven days; prune expired link/search records.
                 now = time.time()
-                for kind in ('bot_link', 'bot_search', 'bot_inbox'):
+                for kind in ('bot_link', 'bot_search', 'bot_session', 'bot_inbox'):
                     for record in self.values(kind):
                         expired = record.get('expires', now + 1) <= now if kind != 'bot_inbox' else record['done'] and record['created'] < now - 604800
                         if expired:
@@ -603,7 +661,7 @@ class BotService:
         if self.tg_token:
             self.tasks.append(asyncio.create_task(self.register_telegram_menu()))
             self.tasks.append(asyncio.create_task(self.poll_telegram()))
-        self.log('info', '机器人已启用：仅私聊、白名单用户、下载链接交付', category='bot')
+        self.log('info', '机器人已启用：Telegram 白名单私聊，企业微信按成员范围设置，下载链接交付', category='bot')
 
     async def stop(self):
         for task in self.tasks:

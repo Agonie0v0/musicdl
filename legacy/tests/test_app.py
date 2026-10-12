@@ -459,11 +459,13 @@ def test_config_rolls_back_when_persistence_fails(monkeypatch):
     old_config = copy.deepcopy(manager.config)
     old_client = object()
     manager.client = old_client
+    manager.source_errors = {'previous-source': 'previous error'}
     new_config = copy.deepcopy(old_config)
     new_config['proxy_url'] = 'http://proxy.invalid:1'
 
     def fake_build():
         manager.client = object()
+        manager.source_errors = {'new-source': 'new error'}
 
     def fail_save(_cfg):
         raise OSError('只读文件系统')
@@ -474,6 +476,7 @@ def test_config_rolls_back_when_persistence_fails(monkeypatch):
         manager.applyconfig(new_config)
     assert manager.config == old_config
     assert manager.client is old_client
+    assert manager.source_errors == {'previous-source': 'previous error'}
 
 
 @pytest.mark.parametrize(

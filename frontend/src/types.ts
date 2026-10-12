@@ -36,6 +36,8 @@ export interface Config {
     label: string;
     category?: string;
     engine_name?: string;
+    proxy_recommended?: boolean;
+    init_error?: string | null;
   }[];
   engine?: string;
   sources: string[];

@@ -200,7 +200,10 @@ export function BotSettings() {
         <p>
           Telegram 发送 /start 或 /menu 打开功能菜单，也可直接发送歌名搜索。
           输入框旁的菜单会自动注册；搜索结果每页 5 首，显示音质和文件大小。
-          /status 查看进度和管理任务。仅允许白名单用户私聊使用。
+          /status
+          查看进度和管理任务。可发送“下一页”“上一页”“第2页”，下载只需“下载
+          1”。Telegram
+          仅允许白名单用户私聊；企业微信白名单留空时允许应用可见成员。
         </p>
         <p>
           连接测试只验证凭据，不发送消息。保存配置后再测试；下载和命令处理的错误可在“运行日志
@@ -265,7 +268,7 @@ export function BotSettings() {
           {field(
             "wecom_allowed_users",
             "企业微信用户白名单",
-            "成员 UserID，多个用逗号分隔",
+            "留空允许全部成员；限制时填 UserID，逗号分隔",
           )}
         </div>
         <label>
@@ -283,6 +286,7 @@ export function BotSettings() {
           在应用的“接收消息”中填入回调地址、Token 和 43 位
           EncodingAESKey；配置应用可见成员和企业可信
           IP。保存后可进行平台回调验证。
+          白名单留空时允许应用可见范围内的成员，填写后仅允许指定 UserID。
         </p>
         <button
           type="button"
