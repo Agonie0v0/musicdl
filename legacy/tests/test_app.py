@@ -17,6 +17,70 @@ from legacy import app
 WRITE_HEADERS = {'X-MusicDL-Request': '1'}
 
 
+@pytest.mark.parametrize('encoded,partial', [(False, False), (True, False), (True, True)])
+def test_audio_stream_normalizes_mime_and_compressed_range(monkeypatch, encoded, partial):
+    from unittest.mock import Mock
+    content = b'fLaC' + b'\0' * 20
+    song = SimpleNamespace(source='KugouMusicClient', ext='flac', song_name='stream fixture', downloaded_contents=None,
+                           protocol='HTTP', download_url='https://example.org/audio',
+                           default_download_headers={'User-Agent': 'fixture'}, default_download_cookies={})
+    monkeypatch.setattr(app, 'getsong', lambda sid: song)
+    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={'KugouMusicClient': SimpleNamespace(default_headers={})}))
+    monkeypatch.setattr(app, 'validatepublicurl', lambda url, label: url)
+    monkeypatch.setattr(app, 'AUTH_ENABLED', False)
+    first = Mock()
+    first.status_code = 206 if partial else 200
+    first.headers = {'Content-Type': 'application/octet-stream', 'Content-Length': '999' if encoded else str(len(content))}
+    if encoded:
+        first.headers.update({'Content-Encoding': 'gzip'})
+    if partial:
+        first.headers.update({'Content-Range': 'bytes 0-998/999'})
+    first.iter_content.return_value = iter([content])
+    second = Mock()
+    second.status_code, second.headers = 200, first.headers.copy()
+    second.headers.pop('Content-Range', None)
+    second.iter_content.return_value = iter([content])
+    calls = []
+    def get(url, **kwargs):
+        calls.append(copy.deepcopy(kwargs))
+        return first if len(calls) == 1 else second
+    monkeypatch.setattr(app.pyrequests, 'get', get)
+    response = TestClient(app.app).get('/api/stream/fixture', headers={'Range': 'bytes=0-'})
+    assert response.status_code == 200
+    assert response.content == content
+    assert response.headers['content-type'] == 'audio/flac'
+    assert calls[0]['headers']['Accept-Encoding'] == 'identity'
+    if encoded:
+        assert 'content-length' not in response.headers
+        assert 'content-range' not in response.headers
+        assert response.headers['accept-ranges'] == 'none'
+    else:
+        assert response.headers['content-length'] == str(len(content))
+    if partial:
+        assert len(calls) == 2 and 'Range' not in calls[1]['headers']
+        second.close.assert_called_once()
+    first.close.assert_called_once()
+
+
+def test_audio_stream_rejects_error_page_instead_of_labelling_it_audio(monkeypatch):
+    from unittest.mock import Mock
+    song = SimpleNamespace(source='KugouMusicClient', ext='flac', song_name='invalid fixture', downloaded_contents=None,
+                           protocol='HTTP', download_url='https://example.org/audio',
+                           default_download_headers={}, default_download_cookies={})
+    monkeypatch.setattr(app, 'getsong', lambda sid: song)
+    monkeypatch.setattr(app.manager, 'get', lambda: SimpleNamespace(music_clients={'KugouMusicClient': SimpleNamespace(default_headers={})}))
+    monkeypatch.setattr(app, 'validatepublicurl', lambda url, label: url)
+    monkeypatch.setattr(app, 'AUTH_ENABLED', False)
+    upstream = Mock(status_code=200, headers={'Content-Type': 'text/html'})
+    upstream.iter_content.return_value = iter([b'<!DOCTYPE html><html>access denied</html>'])
+    monkeypatch.setattr(app.pyrequests, 'get', lambda *args, **kwargs: upstream)
+    response = TestClient(app.app).get('/api/stream/fixture')
+    assert response.status_code == 502
+    assert '下载后' in response.json()['detail']
+    upstream.close.assert_called_once()
+    assert any(entry['category'] == 'playback' and '在线试听拉取失败' in entry['message'] for entry in app.LOGS)
+
+
 @pytest.fixture(autouse=True)
 def reset_security_state():
     app.SESSIONS.clear()

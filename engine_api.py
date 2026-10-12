@@ -418,11 +418,31 @@ def install(old, root):
                     yield ': keepalive\n\n'
         return StreamingResponse(events(), media_type='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
+    def downloaded_audio(sid):
+        for job in values('download'):
+            if job.get('status') != 'complete' or job.get('track', {}).get('id') != sid or not job.get('file'):
+                continue
+            try:
+                target = resolve_library_file(job['file'])
+                if target.suffix.lower() in local_library.AUDIO_EXTENSIONS:
+                    return job, target
+            except (HTTPException, OSError):
+                continue
+        return None
+
     @router.post('/api/tracks/{sid}/playback')
     def playback(sid: str):
         record = get('track', sid)
         if record and record.get('local_path'):
             return library_file(record['local_path'])['track']
+        downloaded = downloaded_audio(sid)
+        if downloaded:
+            job, target = downloaded
+            result = copy.deepcopy(job['track'])
+            result['playback'].update(state='ready', url='/api/files/audio?path=' + quote(job['file']),
+                                      codec=target.suffix.lower().lstrip('.'), detail='播放已下载文件', preview_only=False)
+            old.pushlog('info', f'播放已下载文件：{result["title"]} · {result["source"]}', category='playback')
+            return result
         result = remember(song_for(sid), sid)
         old.pushlog('info', f'准备试听：{result["title"]} · {result["source"]} · {result["playback"]["codec"]}', category='playback')
         return result
@@ -448,6 +468,11 @@ def install(old, root):
 
     @router.get('/api/stream/{sid}')
     def stream(sid: str, request: Request):
+        downloaded = downloaded_audio(sid)
+        if downloaded:
+            _, target = downloaded
+            return FileResponse(target, media_type=local_library.MEDIA_TYPES.get(target.suffix.lower(), 'application/octet-stream'),
+                                filename=target.name, content_disposition_type='inline')
         song_for(sid)
         return old.stream(sid, request)
 

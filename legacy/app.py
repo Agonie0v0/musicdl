@@ -888,9 +888,14 @@ def stream(sid: str, request: Request):
         raise HTTPException(415, '该曲目不支持在线播放（加密或流媒体协议），请使用下载功能')
     download_url = validatepublicurl(song.download_url, '音频地址')
     headers = dict(song.default_download_headers or getattr(client, 'default_headers', None) or {})
+    # iter_content decodes compression; byte ranges must refer to raw audio.
+    headers = {k: v for k, v in headers.items() if k.lower() not in {'range', 'if-range', 'accept-encoding'}}
+    headers['Accept-Encoding'] = 'identity'
     cookies = dict(song.default_download_cookies or {})
     if request.headers.get('range'):
         headers['Range'] = request.headers['range']
+    if request.headers.get('if-range'):
+        headers['If-Range'] = request.headers['if-range']
     proxies = manager.config['requests_overrides'].get(song.source, {}).get('proxies')
     if proxies is None and (manager.config.get('proxy_url') or '').strip():
         scope = manager.config.get('proxy_scope', 'all')
@@ -899,19 +904,44 @@ def stream(sid: str, request: Request):
             p = manager.config['proxy_url'].strip()
             proxies = {'http': p, 'https': p}
     kwargs = {'stream': True, 'headers': headers, 'cookies': cookies, 'timeout': 30, 'proxies': proxies}
+    upstream = None
     try:
         upstream = pyrequests.get(download_url, **kwargs)
         upstream.raise_for_status()
+        encoded = upstream.headers.get('Content-Encoding', 'identity').lower() not in {'', 'identity'}
+        if encoded and upstream.status_code == 206:
+            # A decoded partial compressed body cannot carry encoded offsets.
+            upstream.close()
+            headers.pop('Range', None)
+            headers.pop('If-Range', None)
+            upstream = pyrequests.get(download_url, **kwargs)
+            upstream.raise_for_status()
+            encoded = upstream.headers.get('Content-Encoding', 'identity').lower() not in {'', 'identity'}
+            if upstream.status_code != 200:
+                raise ValueError('音源未返回完整音频')
+        chunks = iter(upstream.iter_content(chunk_size=64 * 1024))
+        first = next(chunks, b'')
+        prefix = first.lstrip()[:32].lower()
+        if not first or prefix.startswith((b'<!doctype', b'<html', b'<?xml', b'{', b'[')):
+            raise ValueError('音源返回空内容或错误页面')
     except Exception as err:
-        raise HTTPException(502, f'拉取音频失败（未降低 TLS 校验）: {err}')
-    resp_headers = {'Accept-Ranges': upstream.headers.get('Accept-Ranges', 'bytes')}
-    for h in ('Content-Length', 'Content-Range'):
+        if upstream is not None:
+            upstream.close()
+        pushlog('error', f'在线试听拉取失败：{song.song_name} · {song.source} · {type(err).__name__}', category='playback')
+        raise HTTPException(502, '在线试听地址不可用，请重新搜索、更换音源，或下载后从音乐文件中播放')
+    resp_headers = {'Accept-Ranges': 'none' if encoded else upstream.headers.get('Accept-Ranges', 'none')}
+    for h in (() if encoded else ('Content-Length', 'Content-Range', 'ETag', 'Last-Modified')):
         if h in upstream.headers:
             resp_headers[h] = upstream.headers[h]
-    media_type = upstream.headers.get('Content-Type') or mime
-    if 'text' in media_type or 'html' in media_type:
-        media_type = mime
-    return StreamingResponse(upstream.iter_content(chunk_size=256 * 1024), status_code=upstream.status_code,
+    # Source format is authoritative: some CDNs label FLAC as octet-stream.
+    media_type = mime if mime != 'application/octet-stream' else upstream.headers.get('Content-Type', mime)
+    def audio_chunks():
+        try:
+            yield first
+            yield from chunks
+        finally:
+            upstream.close()
+    return StreamingResponse(audio_chunks(), status_code=upstream.status_code,
                              media_type=media_type, headers=resp_headers)
 
 
