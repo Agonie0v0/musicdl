@@ -605,6 +605,47 @@ try {
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => scrollTo(0, 0));
+  for (const width of [768, 1200, 1440, 1920, 2560]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const form = await page.locator(".settings-form").boundingBox();
+    const view = await page.locator(".view").boundingBox();
+    assert.ok(
+      Math.abs(form.width - view.width) < 1,
+      "settings use available space",
+    );
+    const basics = await page.locator(".settings-basics").boundingBox();
+    const proxy = await page.locator(".settings-proxy").boundingBox();
+    if (width > 1200) {
+      assert.equal(basics.y, proxy.y, "basic and proxy settings share a row");
+      assert.ok(
+        basics.x + basics.width < proxy.x,
+        "settings columns do not overlap",
+      );
+    } else {
+      assert.ok(
+        proxy.y >= basics.y + basics.height,
+        "settings stack on smaller screens",
+      );
+    }
+    const player = await page.locator(".player").boundingBox();
+    assert.ok(player.width <= 1240, "bottom player has a bounded width");
+    assert.ok(
+      Math.abs(player.x + player.width / 2 - width / 2) < 1,
+      "bottom player is centered",
+    );
+    assert.ok(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      `settings overflow at ${width}`,
+    );
+  }
+  await page.setViewportSize({ width: 1920, height: 1000 });
+  await page.screenshot({ path: "../output/test-ui-settings-wide.png" });
+  await page.getByLabel("界面主题").selectOption("dark");
+  await page.screenshot({ path: "../output/test-ui-settings-dark.png" });
+  await page.getByLabel("界面主题").selectOption("light");
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({
     path: "../output/test-ui-settings.png",
     fullPage: true,

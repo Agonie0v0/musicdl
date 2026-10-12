@@ -236,7 +236,7 @@ export function EngineSettings({
         }
       }}
     >
-      <section className="settings-section">
+      <section className="settings-section settings-basics">
         <h2>基础设置</h2>
         <p>直接使用原引擎的完整配置。保存后重新初始化音源客户端。</p>
         <div className="settings-grid">
@@ -343,7 +343,7 @@ export function EngineSettings({
           </label>
         </div>
       </section>
-      <section className="settings-section">
+      <section className="settings-section settings-proxy">
         <h2>代理设置</h2>
         <div className="settings-grid">
           <label>
@@ -397,7 +397,7 @@ export function EngineSettings({
           </fieldset>
         )}
       </section>
-      <section className="settings-section">
+      <section className="settings-section settings-behavior">
         <h2>引擎行为</h2>
         <div className="engine-switches">
           {switches.map(([key, label, description]) => (
@@ -415,7 +415,7 @@ export function EngineSettings({
           ))}
         </div>
       </section>
-      <section className="settings-section">
+      <section className="settings-section settings-sources">
         <h2>全部音源与账号设置</h2>
         <p>
           Cookie
@@ -438,121 +438,127 @@ export function EngineSettings({
           </button>
           <span>{config.music_sources.length} 个音源参与搜索</span>
         </div>
-        {sources.map((source) => {
-          const name = source.engine_name || aliases[source.id] || source.id;
-          const override =
-            (advancedMap("requests_overrides")[name] as JsonObject) || {};
-          const proxies = (override.proxies as JsonObject) || {};
-          return (
-            <details key={source.id} className="source-setting">
-              <summary>
-                <span>{source.label}</span>
-                <label
-                  className="check-label"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <input
-                    type="checkbox"
-                    checked={config.music_sources.includes(name)}
+        <div className="source-settings-grid">
+          {sources.map((source) => {
+            const name = source.engine_name || aliases[source.id] || source.id;
+            const override =
+              (advancedMap("requests_overrides")[name] as JsonObject) || {};
+            const proxies = (override.proxies as JsonObject) || {};
+            return (
+              <details key={source.id} className="source-setting">
+                <summary>
+                  <span>{source.label}</span>
+                  <label
+                    className="check-label"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={config.music_sources.includes(name)}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          music_sources: e.target.checked
+                            ? [...config.music_sources, name]
+                            : config.music_sources.filter((v) => v !== name),
+                        })
+                      }
+                    />
+                    参与搜索
+                  </label>
+                </summary>
+                <label>
+                  Cookie
+                  <textarea
+                    spellCheck={false}
+                    autoComplete="off"
+                    value={cookieText(config.cookies[name])}
                     onChange={(e) =>
                       setConfig({
                         ...config,
-                        music_sources: e.target.checked
-                          ? [...config.music_sources, name]
-                          : config.music_sources.filter((v) => v !== name),
+                        cookies: { ...config.cookies, [name]: e.target.value },
                       })
                     }
-                  />
-                  参与搜索
-                </label>
-              </summary>
-              <label>
-                Cookie
-                <textarea
-                  spellCheck={false}
-                  autoComplete="off"
-                  value={cookieText(config.cookies[name])}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      cookies: { ...config.cookies, [name]: e.target.value },
-                    })
-                  }
-                  placeholder="未配置账号"
-                />
-              </label>
-              <div className="settings-grid">
-                <label>
-                  分源下载线程数
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={String(
-                      advancedMap("clients_threadings")[name] ?? "",
-                    )}
-                    onChange={(e) =>
-                      updateAdvanced(
-                        "clients_threadings",
-                        name,
-                        e.target.value ? Number(e.target.value) : undefined,
-                      )
-                    }
-                    placeholder="使用默认线程数"
+                    placeholder="未配置账号"
                   />
                 </label>
-                <label>
-                  分源 HTTP / HTTPS 代理
-                  <input
-                    value={String(proxies.https || proxies.http || "")}
-                    onChange={(e) => {
-                      const next = { ...override };
-                      if (e.target.value.trim())
-                        next.proxies = {
-                          ...proxies,
-                          http: e.target.value,
-                          https: e.target.value,
-                        };
-                      else delete next.proxies;
-                      updateAdvanced("requests_overrides", name, next);
-                    }}
-                    placeholder="使用全局代理设置"
-                  />
-                </label>
-              </div>
-            </details>
-          );
-        })}
+                <div className="settings-grid">
+                  <label>
+                    分源下载线程数
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      value={String(
+                        advancedMap("clients_threadings")[name] ?? "",
+                      )}
+                      onChange={(e) =>
+                        updateAdvanced(
+                          "clients_threadings",
+                          name,
+                          e.target.value ? Number(e.target.value) : undefined,
+                        )
+                      }
+                      placeholder="使用默认线程数"
+                    />
+                  </label>
+                  <label>
+                    分源 HTTP / HTTPS 代理
+                    <input
+                      value={String(proxies.https || proxies.http || "")}
+                      onChange={(e) => {
+                        const next = { ...override };
+                        if (e.target.value.trim())
+                          next.proxies = {
+                            ...proxies,
+                            http: e.target.value,
+                            https: e.target.value,
+                          };
+                        else delete next.proxies;
+                        updateAdvanced("requests_overrides", name, next);
+                      }}
+                      placeholder="使用全局代理设置"
+                    />
+                  </label>
+                </div>
+              </details>
+            );
+          })}
+        </div>
       </section>
-      <section className="settings-section">
+      <section className="settings-section settings-advanced">
         <h2>分源高级配置</h2>
         <p>
           键使用完整音源名称，例如
           NeteaseMusicClient。已有参数会原样读取、保存；修改普通设置不会清空这些配置。
         </p>
-        {advancedFields.map(([key, label, description]) => (
-          <label key={key}>
-            {label}（{key}）
-            <small className="setting-help">{description}</small>
+        <div className="advanced-settings-grid">
+          {advancedFields.map(([key, label, description]) => (
+            <label key={key}>
+              {label}（{key}）
+              <small className="setting-help">{description}</small>
+              <textarea
+                className="config-editor"
+                rows={6}
+                spellCheck={false}
+                value={drafts[key]}
+                onChange={(e) =>
+                  setDrafts({ ...drafts, [key]: e.target.value })
+                }
+              />
+            </label>
+          ))}
+          <label>
+            其他全局参数
             <textarea
               className="config-editor"
-              rows={6}
+              rows={4}
               spellCheck={false}
-              value={drafts[key]}
-              onChange={(e) => setDrafts({ ...drafts, [key]: e.target.value })}
+              value={extraGlobal}
+              onChange={(e) => setExtraGlobal(e.target.value)}
             />
           </label>
-        ))}
-        <label>
-          其他全局参数
-          <textarea
-            className="config-editor"
-            rows={4}
-            spellCheck={false}
-            value={extraGlobal}
-            onChange={(e) => setExtraGlobal(e.target.value)}
-          />
-        </label>
+        </div>
       </section>
       <div className="settings-save">
         <button
