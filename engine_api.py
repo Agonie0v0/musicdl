@@ -686,6 +686,9 @@ def install(old, root):
 
     @router.post('/api/downloads')
     def enqueue(items: list[DownloadItem]):
+        return enqueue_tracks(items)
+
+    def enqueue_tracks(items, job_ids=None):
         if not 1 <= len(items) <= 200:
             raise HTTPException(400, '每批请选择 1–200 首')
         prepared = []
@@ -699,9 +702,14 @@ def install(old, root):
             prepared.append((song, value))
         result = []
         with runner_lock:
-            for song, value in prepared:
+            for index, (song, value) in enumerate(prepared):
                 quality = value['qualities'][0]
-                job = {'id': uuid.uuid4().hex, 'track': value, 'quality_id': quality['id'], 'quality_label': quality['label'],
+                ident = job_ids[index] if job_ids else uuid.uuid4().hex
+                existing = get('download', ident)
+                if existing:
+                    result.append(existing)
+                    continue
+                job = {'id': ident, 'track': value, 'quality_id': quality['id'], 'quality_label': quality['label'],
                        'status': 'queued', 'bytes': 0, 'total_bytes': None, 'detail': '等待原音源下载器',
                        'file': None, 'created_at': int(time.time())}
                 put('download', job['id'], job)
@@ -913,3 +921,29 @@ def install(old, root):
     old.app.mount('/assets', StaticFiles(directory=root / 'frontend/dist/assets'), name='assets')
     old.app.state.engine_test = {'remember': remember, 'song_for': song_for, 'search_pool': search_pool,
                                 'source_results': source_results, 'config': config, 'registered': registered}
+
+    async def bot_search(keyword, sources):
+        result = await search_start(SearchBody(keyword=keyword, sources=sources or None))
+        job = searches[result['id']]
+        partial = False
+        try:
+            await asyncio.wait_for(asyncio.shield(job['task']), timeout=90)
+        except asyncio.TimeoutError:
+            partial = True
+            await search_stop(result['id'])
+            await asyncio.gather(job['task'], return_exceptions=True)
+        except asyncio.CancelledError:
+            await search_stop(result['id'])
+            raise
+        events = list(job['events'])
+        tracks = list({value['id']: value for _, kind, value in events if kind == 'track'}.values())
+        partial |= any(kind == 'source' and value['status']['state'] == 'failed' for _, kind, value in events)
+        return tracks, partial
+
+    def bot_enqueue(value, ident):
+        return enqueue_tracks([DownloadItem(track_id=value['id'], quality_id=value['qualities'][0]['id'])], [ident])[0]
+
+    import bot_notifications
+    bot_notifications.install(old.app, get=get, put=put, values=values, remove=remove,
+                              search=bot_search, enqueue=bot_enqueue, control=control_download,
+                              resolve=resolve_library_file, log=old.pushlog)

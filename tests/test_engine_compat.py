@@ -25,6 +25,47 @@ import engine_worker
 HEADERS = {'X-MusicDL-Request': '1'}
 
 
+def test_bot_uses_shared_engine_queue_and_signed_link_without_web_login(monkeypatch):
+    import asyncio
+    from bot_notifications import DownloadLinks
+    bot = app.app.state.bots
+    state = app.app.state.engine_test
+    def inline_submit(fn, *args):
+        future = Future()
+        future.set_result([fixture_song()])
+        return future
+    monkeypatch.setattr(state['search_pool'], 'submit', inline_submit)
+    monkeypatch.setattr(bot, 'sources', ['netease'])
+    monkeypatch.setattr(bot, 'tg_users', {'123'})
+    monkeypatch.setattr(bot, 'links', DownloadLinks(bot.get, bot.put, bot.links.resolve if bot.links else
+                       lambda token: app.original.resolvefile(*json.loads(token)), 'https://music.example.com', 86400))
+    message = {'id': 'd' * 64, 'channel': 'tg', 'user': '123', 'text': '/search bot-fixture'}
+    asyncio.run(bot.command(message))
+    message.update(id='e' * 64, text='/download dddddddd 1')
+    asyncio.run(bot.command(message))
+    ident = 'e' * 32
+    deadline = time.monotonic() + 50
+    while time.monotonic() < deadline:
+        job = bot.get('download', ident)
+        if job['status'] in {'complete', 'failed'}:
+            break
+        time.sleep(.2)
+    assert job['status'] == 'complete', job
+    assert bot.get('bot_task', ident)['owner'] == 'tg:123'
+    # Normal APIs remain session protected; only the signed route is public.
+    monkeypatch.setattr(app.original, 'AUTH_ENABLED', True)
+    client = TestClient(app.app)
+    assert client.get('/api/downloads').status_code == 401
+    url = bot.links.create(job)
+    from urllib.parse import urlsplit
+    link = urlsplit(url)
+    response = client.get(link.path + '?' + link.query, headers={'Range': 'bytes=0-43'})
+    assert response.status_code == 206
+    assert response.content.startswith(b'RIFF')
+    assert len(response.content) == 44
+    assert client.get(link.path, params={'expires': int(time.time()) + 100, 'signature': '0' * 64}).status_code == 403
+
+
 def test_import_creates_managed_playlist_with_native_failure_report(monkeypatch):
     client = TestClient(app.app)
     failure = {'id': 1950343972, 'name': '可能', 'ar': [{'name': '程响'}],

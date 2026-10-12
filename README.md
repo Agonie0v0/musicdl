@@ -135,6 +135,95 @@ services:
 
 </details>
 
+## 企业微信应用与 Telegram 机器人
+
+机器人复用网页的音源配置和下载队列，支持搜索、选择曲目、查询状态、取消、继续下载和重新获取链接。两端统一发送原文件下载链接，不上传音乐附件，不压缩或转码，也不设置单文件大小上限。手机直接从 musicdl 下载，实际容量与速度取决于服务器磁盘、带宽、代理和手机存储。企业微信内置浏览器若无法保存文件，可选择在系统浏览器中打开；保存到手机文件目录后，是否能导入播放器取决于手机和播放器。
+
+默认不启用机器人。启用前准备一个手机和企业微信都可访问的 HTTPS 域名，将其反向代理到 musicdl 的 `8765` 端口，并将域名加入 `MUSICDL_TRUSTED_HOSTS`。下载与回调路径必须保留完整路径及查询参数，不能在这些路径额外添加网页登录、Basic Auth 或交互式验证。网页 `/api/` 仍保留原有认证；`/downloads/` 由单文件签名鉴权，`/bot/wecom` 由企业微信签名和 AES 加密鉴权。
+
+### 配置方式
+
+源码运行：在现有 `.env` 中添加下面需要的配置，更新依赖后重启。已有虚拟环境可执行 `python -m pip install -r requirements.txt`（Windows 使用 `.venv\Scripts\python.exe`）。不要覆盖已有登录与音源配置。
+
+Docker：在 Compose 目录创建 `.env.bots`，填入下面配置；创建或合并 `compose.override.yml`：
+
+```yaml
+services:
+  musicdl-webui:
+    env_file:
+      - .env.bots
+    environment:
+      # 请替换实际域名和服务器 IP，保留原有需要访问的主机名
+      MUSICDL_TRUSTED_HOSTS: 'localhost,127.0.0.1,192.168.1.100,music.example.com'
+      MUSICDL_COOKIE_SECURE: '1'
+```
+
+以下是机器人环境变量示例。只启用一个渠道时，另一个渠道的凭据保持为空：
+
+```dotenv
+MUSICDL_PUBLIC_URL=https://music.example.com
+MUSICDL_LINK_TTL_SECONDS=86400
+# 可选：只使用指定的已启用音源；留空使用网页设置中的全部音源
+MUSICDL_BOT_SOURCES=netease,qq
+
+MUSICDL_TG_TOKEN=你的BotFatherToken
+MUSICDL_TG_ALLOWED_USERS=123456789,987654321
+# 可选：独立 HTTP/HTTPS 代理；Docker 内须能访问该地址
+MUSICDL_TG_PROXY=
+
+MUSICDL_WECOM_CORP_ID=你的企业ID
+MUSICDL_WECOM_AGENT_ID=1000002
+MUSICDL_WECOM_SECRET=你的应用Secret
+MUSICDL_WECOM_TOKEN=接收消息配置中的Token
+MUSICDL_WECOM_AES_KEY=接收消息配置中的43位EncodingAESKey
+MUSICDL_WECOM_ALLOWED_USERS=zhangsan,lisi
+```
+
+`MUSICDL_PUBLIC_URL` 必须是 HTTPS 域名地址，不带路径、用户名密码或查询参数。链接默认有效 24 小时，可通过 `MUSICDL_LINK_TTL_SECONDS` 配置为 60–604800 秒。配置缺少必要字段或白名单时会拒绝启动，并在启动日志中说明，不会自动开放给所有用户。凭据应保存在本机配置中，不提交到 Git。
+
+从当前源码部署 Docker 时，先构建包含机器人模块的新镜像，再重新创建容器。本项目默认 Compose 只配置了 `image`，使用：
+
+```sh
+docker build -t ghcr.io/agonie0v0/musicdl:latest .
+docker compose up -d --pull never
+```
+
+使用已发布且包含本功能的镜像时，可执行 `docker compose up -d --pull always`。保留 `data` 挂载，它包含机器人任务归属、待发送通知、命令去重记录和链接签名密钥；丢失数据目录会使旧链接和任务归属失效。运行单个服务进程，不要同时启动多个容器共享同一个 Telegram Token，也不要使用多个 Uvicorn worker。
+
+### Telegram 设置
+
+通过 BotFather 创建 Bot，将 Token 写入 `MUSICDL_TG_TOKEN`，将允许使用的账号的**数字用户 ID**写入 `MUSICDL_TG_ALLOWED_USERS`，不是用户名或群 ID。当前仅接受与 Bot 的私聊；用户先打开 Bot 并发送 `/start`。
+
+机器人使用长轮询，不需要 Telegram 公网回调。如果同一 Token 曾配置 webhook，先通过 Telegram 的 `deleteWebhook` 接口移除，否则长轮询不能收消息。服务器必须能访问 `api.telegram.org`；有需要时配置独立代理，不影响音乐音源代理。运行日志中 Telegram 接收失败通常与 Token、网络或 webhook 冲突有关。
+
+### 企业微信自建应用设置
+
+1. 在企业微信管理后台创建自建应用，将使用者加入应用可见范围，记录企业 ID、AgentID 和应用 Secret。
+2. 将应用所需的服务器公网出口 IP 配置为企业可信 IP，确保能够调用获取 Token 和发送消息接口。
+3. 在应用的“接收消息 / 设置 API 接收”中生成 Token、EncodingAESKey，填写到环境变量，启动或重启 musicdl。
+4. 接收消息 URL 填写 `https://music.example.com/bot/wecom`，使用与环境变量一致的 Token、EncodingAESKey，保存验证。
+5. 在手机企业微信中打开该应用的会话发送“帮助”。`MUSICDL_WECOM_ALLOWED_USERS` 填企业通讯录中的成员 UserID。
+
+回调先校验签名、解密、企业和应用身份，再立即确认接收；搜索与下载在后台执行，结果通过应用消息发送给发起人。只支持应用与成员的直接会话，不读取普通微信群或企业微信群消息。服务器时钟应保持准确，超过 10 分钟的消息回调会被拒绝。
+
+### 命令和下载流程
+
+| 中文命令 | Telegram 命令 | 说明 |
+| --- | --- | --- |
+| `帮助` | `/help` 或 `/start` | 显示命令 |
+| `搜索 晴天 周杰伦` | `/search 晴天 周杰伦` | 最多返回 10 个可下载结果 |
+| `下载 a1b2c3d4 2` | `/download a1b2c3d4 2` | 下载该次搜索的第 2 首；TG 也可点击结果按钮 |
+| `状态` | `/status` | 查看自己的最近 10 个任务 |
+| `取消 任务编号` | `/cancel 任务编号` | 取消自己的下载 |
+| `继续 任务编号` | `/resume 任务编号` | 恢复暂停或重试失败任务 |
+| `链接 任务编号` | `/link 任务编号` | 为已完成任务重新生成下载链接 |
+
+搜索编号绑定发起人，有效期为 30 分钟；一次搜索最长等待 90 秒，超时会返回已取得的结果。含分集的结果需在网页展开选择，机器人列表不展示。每个用户最多同时有 5 个活动下载任务，实际并发仍受现有下载队列限制。下载完成后，TG 发送“下载到手机”按钮，企业微信发送可点击的下载卡片。
+
+链接不需要网页登录，持有者在有效期内可以下载对应的单个文件，因此不要公开转发。支持 HTTP Range 和 HEAD，请确保反向代理透传 Range、If-Range 等请求头，不缓存下载响应，也不要记录包含签名的完整查询参数。链接失效不会删除音乐文件，可发送“链接 任务编号”重新获取；文件被删除或替换后旧链接失效。
+
+下载与消息发送分别记录：发送失败会退避重试，不会重新下载音乐。服务重启后未完成的下载会按现有规则暂停，机器人通知用户通过“继续”恢复；待处理命令和通知保留。外部平台发送成功但响应丢失时可能出现重复通知。下载记录在网页被移除后，机器人不能再为该任务获取新链接。
+
 ## Windows
 
 使用完整运行包 `musicdl-full-engine-windows.zip` 时，先完整解压，再双击 `start.bat`。包内包含 Python、依赖和已构建前端，无需额外安装开发工具。重复启动会打开现有服务；启动错误记录在 `logs/startup.log`。
