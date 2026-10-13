@@ -198,12 +198,16 @@ class DownloadLinks:
 
 
 class BotService:
-    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None):
+    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None, project_proxy=None):
         self.get, self.put, self.values, self.remove = get, put, values, remove
         self.search, self.enqueue, self.control, self.log = search, enqueue, control, log
         self.config = {key: os.environ.get('MUSICDL_' + key.upper(), default) for key, default in CONFIG_DEFAULTS.items()}
         self.config.update(get('bot_setting', 'config', {}) if config is None else config)
         cfg = self.config
+        self.project_proxy = project_proxy or (lambda: '')
+        cfg.setdefault('tg_proxy_mode', 'custom' if cfg['tg_proxy'] else 'direct')
+        if cfg['tg_proxy_mode'] not in {'direct', 'project', 'custom'}:
+            raise ValueError('无效的 Telegram 代理模式')
         cfg.setdefault('tg_enabled', bool(cfg['tg_token']))
         cfg.setdefault('wecom_enabled', bool(cfg['wecom_corp_id'] or cfg['wecom_agent_id'] or cfg['wecom_secret']))
         self.tg_token = cfg['tg_token'].strip() if cfg['tg_enabled'] else ''
@@ -238,17 +242,21 @@ class BotService:
         self.links = DownloadLinks(get, put, resolve, base, ttl) if base else None
         self.sources = list(filter(None, (s.strip() for s in cfg['bot_sources'].split(','))))
         self.tg_http, self.wecom_http = requests.Session(), requests.Session()
-        proxy = cfg['tg_proxy'].strip()
+        proxy = self.telegram_proxy()
+        self.tg_http.trust_env = False
         if proxy:
             if urlsplit(proxy).scheme not in {'http', 'https'} or not urlsplit(proxy).hostname:
                 raise ValueError('Telegram 代理必须为 HTTP / HTTPS 地址')
-            self.tg_http.trust_env = False
-            self.tg_http.proxies = {'http': proxy, 'https': proxy}
         self.access_token, self.token_until = '', 0
         self.tasks = []
         self.tg_poll = None
         self.pending = asyncio.Queue(maxsize=100)
         self.seen_rate = {}
+
+    def telegram_proxy(self):
+        mode = self.config['tg_proxy_mode']
+        return (self.project_proxy() if mode == 'project' else
+                self.config['tg_proxy'] if mode == 'custom' else '').strip()
 
     def allowed(self, channel, user):
         if channel == 'tg':
@@ -496,7 +504,10 @@ class BotService:
             self.pending.task_done()
 
     def telegram(self, method, body, timeout=15):
-        response = self.tg_http.post(f'https://api.telegram.org/bot{self.tg_token}/{method}', json=body, timeout=timeout)
+        # Resolve per request so changing or clearing the project proxy takes effect.
+        proxy = self.telegram_proxy() or None
+        response = self.tg_http.post(f'https://api.telegram.org/bot{self.tg_token}/{method}', json=body, timeout=timeout,
+                                     proxies={'http': proxy, 'https': proxy})
         data = response.json()
         if not data.get('ok'):
             if method == 'editMessageText' and data.get('error_code') == 400 and 'message is not modified' in data.get('description', '').lower():

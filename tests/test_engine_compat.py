@@ -17,7 +17,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _root = Path(tempfile.mkdtemp(prefix='musicdl-compat-test-'))
 os.environ.update(MUSICDL_USER='', MUSICDL_PASS='', MUSICDL_COOKIE_SECURE='0',
-                  MUSICDL_TRUSTED_HOSTS='testserver,localhost,127.0.0.1',
                   MUSICDL_CONFIG=str(_root / 'config.json'), MUSICDL_DATA_DIR=str(_root / 'data'),
                   MUSICDL_FILE_ROOT=str(_root / 'music'), MUSICDL_BIND='127.0.0.1')
 
@@ -865,3 +864,35 @@ def test_resolved_tracks_survive_cancellation_of_slow_native_source(monkeypatch,
         assert terminated
         assert not list((_root / 'data' / 'engine').glob('*.search.partial'))
     asyncio.run(check())
+
+
+def test_domain_changes_keep_api_auth_and_request_guard(monkeypatch):
+    client = TestClient(app.app)
+    monkeypatch.setattr(app.original, 'AUTH_ENABLED', True)
+    for host in ['music.example.com', '192.168.23.45:8765', '[::1]:8765']:
+        assert client.get('/api/health', headers={'Host': host}).status_code == 200
+        assert client.get('/api/engine/config', headers={'Host': host}).status_code == 401
+        assert client.put('/api/engine/config', headers={'Host': host}, json={}).status_code == 403
+
+
+def test_invalid_project_proxy_does_not_change_config():
+    client = TestClient(app.app)
+    original = client.get('/api/engine/config').json()
+    for proxy in ['not-a-url', 'socks5://localhost:1080', 'http://']:
+        response = client.put('/api/engine/config', headers=HEADERS, json={**original, 'proxy_url': proxy})
+        assert response.status_code == 400
+        assert client.get('/api/engine/config').json() == original
+
+
+def test_project_proxy_source_scope_and_address_changes():
+    manager = app.original.ClientManager()
+    manager.config.update(music_sources=['MiguMusicClient'], proxy_url='http://proxy.example:7890',
+                          proxy_scope='selected', proxy_sources=['MiguMusicClient'], requests_overrides={})
+    for scope, address, expected in [('selected', 'http://proxy.example:7890', True),
+                                     ('selected', 'http://changed.example:8080', True),
+                                     ('none', 'http://changed.example:8080', False),
+                                     ('all', '', False)]:
+        manager.config.update(proxy_scope=scope, proxy_url=address)
+        manager.build()
+        overrides = manager.client.requests_overrides['MiguMusicClient']
+        assert overrides.get('proxies') == ({'http': address, 'https': address} if expected else None)

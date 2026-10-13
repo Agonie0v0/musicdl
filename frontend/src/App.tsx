@@ -35,6 +35,7 @@ import {
   ScrollText,
   Trash2,
   Bell,
+  Github,
 } from "lucide-react";
 import { api } from "./api";
 import { selectResults } from "./results";
@@ -1296,18 +1297,19 @@ export function App() {
                   {favorites.length} 首收藏 · {playlist.length} 首待播
                 </small>
               </span>
-              <Button
-                label="退出登录"
-                onClick={() =>
-                  void api("/auth/logout", "POST")
-                    .then(() => api<{ required: boolean }>("/auth/status"))
-                    .then((s) => s.required && setLoginRequired(true))
-                    .catch(fail)
-                }
-              >
-                <LogOut />
-              </Button>
             </div>
+            <button
+              className="nav-item logout"
+              onClick={() =>
+                void api("/auth/logout", "POST")
+                  .then(() => api<{ required: boolean }>("/auth/status"))
+                  .then((s) => s.required && setLoginRequired(true))
+                  .catch(fail)
+              }
+            >
+              <LogOut />
+              退出登录
+            </button>
           </div>
         </aside>
         <main className="workspace">
@@ -1317,6 +1319,16 @@ export function App() {
               <p>{views[view][1]}</p>
             </div>
             <div className="top-actions">
+              <a
+                className="icon-button project-link"
+                href="https://github.com/Agonie0v0/musicdl"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="项目地址（在新标签页打开）"
+                title="GitHub 项目地址"
+              >
+                <Github aria-hidden="true" />
+              </a>
               <label className="theme-control">
                 {theme === "system" ? (
                   <Monitor />
@@ -1354,9 +1366,6 @@ export function App() {
                   停止搜索
                 </button>
               )}
-              <Button label="音源设置" onClick={() => setView("settings")}>
-                <Settings />
-              </Button>
             </div>
           </header>
           {(view === "search" || view === "favorites") && (

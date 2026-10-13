@@ -618,3 +618,42 @@ def test_stop_waits_for_old_telegram_long_poll_before_reconfiguration(setup_bot)
         asyncio.run(check())
     finally:
         release.set()
+
+
+def test_telegram_project_proxy_follows_changes_and_direct_mode(setup_bot):
+    _, bot, _, _, _ = setup_bot
+    proxy = ['http://proxy.example:7890']
+    bot.project_proxy = lambda: proxy[0]
+    bot.config['tg_proxy_mode'] = 'project'
+    bot.tg_http = Mock()
+    bot.tg_http.post.return_value.json.return_value = {'ok': True, 'result': {}}
+    for address in ['http://proxy.example:7890', 'http://new-proxy.example:8080', '']:
+        proxy[0] = address
+        bot.telegram('getMe', {})
+        assert bot.tg_http.post.call_args.kwargs['proxies'] == {'http': address or None, 'https': address or None}
+    bot.config['tg_proxy_mode'] = 'direct'
+    proxy[0] = 'http://proxy.example:7890'
+    bot.telegram('getMe', {})
+    assert bot.tg_http.post.call_args.kwargs['proxies'] == {'http': None, 'https': None}
+
+
+def test_proxy_mode_migration_save_and_restart(setup_bot, monkeypatch):
+    app, bot, store, _, _ = setup_bot
+    monkeypatch.setattr(BotService, 'start', AsyncMock())
+    monkeypatch.setattr(BotService, 'stop', AsyncMock())
+    client = TestClient(app)
+    store.put('bot_setting', 'config', {'tg_proxy': 'http://old-proxy.example:7890'})
+    def restore():
+        return BotService(store.get, store.put, store.values, store.remove, bot.search,
+                          bot.enqueue, bot.control, bot.links.resolve, bot.log,
+                          project_proxy=lambda: 'http://project-proxy.example:8080')
+    legacy = restore()
+    assert legacy.config['tg_proxy_mode'] == 'custom'
+    assert legacy.telegram_proxy() == 'http://old-proxy.example:7890'
+    response = client.put('/api/bots/config', json={'tg_proxy_mode': 'project'})
+    assert response.status_code == 200
+    assert response.json()['tg_proxy_mode'] == 'project'
+    restored = restore()
+    assert restored.telegram_proxy() == 'http://project-proxy.example:8080'
+    assert client.put('/api/bots/config', json={'tg_proxy_mode': 'invalid'}).status_code == 400
+    assert store.get('bot_setting', 'config')['tg_proxy_mode'] == 'project'

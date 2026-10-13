@@ -2301,16 +2301,14 @@ dialog::backdrop {
     display: none;
   }
   .sidebar-bottom {
-    position: absolute;
-    top: 15px;
-    right: 14px;
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
   }
-  .sidebar-bottom .nav-item {
-    font-size: 0;
-  }
-  .sidebar-bottom .nav-item svg {
-    width: 20px;
-    height: 20px;
+  .sidebar .nav-item {
+    min-height: 44px;
   }
   .sidebar-record,
   .user {
@@ -2322,8 +2320,10 @@ dialog::backdrop {
   .top {
     margin-bottom: 20px;
   }
-  .top-actions > .icon-button {
-    display: none;
+  .top-actions > .project-link {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
   }
   .searchbox {
     gap: 9px;

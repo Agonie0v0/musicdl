@@ -6,6 +6,7 @@ type BotConfig = {
   link_ttl_seconds: number;
   bot_sources: string;
   tg_enabled: boolean;
+  tg_proxy_mode: "direct" | "project" | "custom";
   wecom_enabled: boolean;
   tg_allowed_users: string;
   wecom_corp_id: string;
@@ -187,8 +188,7 @@ export function BotSettings() {
           )}
         </div>
         <p>
-          手机和企业微信需要能访问此 HTTPS 地址；请在部署的
-          MUSICDL_TRUSTED_HOSTS 中加入该域名。设置保存在 data
+          手机和企业微信需要能访问此 HTTPS 地址。设置保存在 data
           目录中，并覆盖对应环境变量。
         </p>
       </section>
@@ -230,12 +230,25 @@ export function BotSettings() {
             "Telegram 用户白名单",
             "数字用户 ID，多个用逗号分隔",
           )}
-          {secret("tg_proxy", "Telegram HTTP / HTTPS 代理")}
+          <label>
+            Telegram 代理
+            <select
+              aria-label="Telegram 代理"
+              value={config.tg_proxy_mode}
+              onChange={(e) => update("tg_proxy_mode", e.target.value)}
+            >
+              <option value="direct">不使用代理</option>
+              <option value="project">使用项目代理</option>
+              {config.tg_proxy_mode === "custom" && (
+                <option value="custom">保留原有独立代理</option>
+              )}
+            </select>
+          </label>
         </div>
         <p>
           从 BotFather 获取 Token。白名单填写数字用户
-          ID；使用长轮询接收命令，请移除该机器人的已有 webhook。代理仅用于
-          Telegram。
+          ID；使用长轮询接收命令，请移除该机器人的已有 webhook。
+          项目代理地址在“音源与设置”中配置和修改，选择后与音源共用。
         </p>
         <button
           type="button"

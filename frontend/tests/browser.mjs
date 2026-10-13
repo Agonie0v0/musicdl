@@ -215,6 +215,7 @@ try {
     link_ttl_seconds: 86400,
     bot_sources: "",
     tg_enabled: false,
+    tg_proxy_mode: "direct",
     wecom_enabled: false,
     tg_allowed_users: "",
     wecom_corp_id: "",
@@ -234,6 +235,7 @@ try {
       method = request.method();
     let result;
     if (p === "/auth/status") result = { authenticated: true, required: false };
+    else if (p === "/auth/logout") result = { success: true };
     else if (p === "/bots/config") {
       if (method === "PUT") {
         const { clear_secrets, ...draft } = request.postDataJSON();
@@ -821,7 +823,7 @@ try {
     .fill("0");
   await page.getByLabel("搜索使用浏览器指纹", { exact: false }).check();
   await page
-    .getByLabel("代理作用范围", { exact: true })
+    .getByLabel("音源代理作用范围", { exact: true })
     .selectOption("selected");
   await page.getByRole("button", { name: "选择推荐音源", exact: true }).click();
   await expect(
@@ -839,7 +841,7 @@ try {
     .getByLabel("GDStudio", { exact: true })
     .check();
   await page
-    .getByLabel("全局 HTTP / HTTPS 代理", { exact: true })
+    .getByLabel("项目 HTTP / HTTPS 代理", { exact: true })
     .fill("http://localhost:7890");
   const neteaseSettings = page.locator(".source-setting").first();
   await neteaseSettings.locator("summary").click();
@@ -848,8 +850,8 @@ try {
     .fill("fixture=netease");
   await neteaseSettings.getByLabel("分源下载线程数", { exact: true }).fill("9");
   await neteaseSettings
-    .getByLabel("分源 HTTP / HTTPS 代理", { exact: true })
-    .fill("http://localhost:7891");
+    .getByLabel("音源代理", { exact: true })
+    .selectOption("project");
   await page
     .getByLabel("分源搜索规则（search_rules）", { exact: false })
     .fill("{");
@@ -871,7 +873,10 @@ try {
   });
   assert.equal(engineConfig.default_threads, 12);
   assert.equal(engineConfig.request_timeout, 0);
-  assert.deepEqual(engineConfig.proxy_sources, ["GDStudioMusicClient"]);
+  assert.deepEqual(engineConfig.proxy_sources, [
+    "GDStudioMusicClient",
+    "NeteaseMusicClient",
+  ]);
   assert.deepEqual(engineConfig.cookies.MiguMusicClient, { fixture: "keep" });
   assert.deepEqual(engineConfig.init_music_clients_cfg.MiguMusicClient, {
     maintain_session: true,
@@ -879,10 +884,10 @@ try {
   assert.equal(engineConfig.clients_threadings.MiguMusicClient, 7);
   assert.equal(engineConfig.clients_threadings.NeteaseMusicClient, 9);
   assert.equal(engineConfig.cookies.NeteaseMusicClient, "fixture=netease");
-  assert.deepEqual(engineConfig.requests_overrides.NeteaseMusicClient.proxies, {
-    http: "http://localhost:7891",
-    https: "http://localhost:7891",
-  });
+  assert.equal(
+    engineConfig.requests_overrides.NeteaseMusicClient.proxies,
+    undefined,
+  );
   assert.deepEqual(engineConfig.requests_overrides.MiguMusicClient.headers, {
     "X-Custom": "keep",
   });
@@ -1076,6 +1081,9 @@ try {
     .getByLabel("Telegram Bot Token", { exact: true })
     .fill("fixture-bot-token");
   await page.getByLabel("Telegram 用户白名单", { exact: true }).fill("123456");
+  await page
+    .getByLabel("Telegram 代理", { exact: true })
+    .selectOption("project");
   await page.getByLabel("启用企业微信", { exact: true }).check();
   await page
     .getByLabel("企业微信 CorpID", { exact: true })
@@ -1113,6 +1121,9 @@ try {
   await expect(
     page.getByText("连接测试成功；未发送消息。", { exact: true }),
   ).toBeVisible();
+  await expect(page.getByLabel("Telegram 代理", { exact: true })).toHaveValue(
+    "project",
+  );
   await page.screenshot({ path: "../output/test-ui-bots.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(
@@ -1120,6 +1131,50 @@ try {
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   );
+  for (const width of [320, 390, 600]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.ok(
+      await page.locator(".sidebar nav").evaluate((nav) => {
+        nav.scrollLeft = nav.scrollWidth;
+        const scrolls = nav.scrollWidth > nav.clientWidth && nav.scrollLeft > 0;
+        nav.scrollLeft = 0;
+        return scrolls;
+      }),
+      "mobile navigation remains horizontally scrollable",
+    );
+    const projectLink = page.getByRole("link", {
+      name: "项目地址（在新标签页打开）",
+    });
+    await expect(projectLink).toBeVisible();
+    await expect(projectLink).toHaveAttribute(
+      "href",
+      "https://github.com/Agonie0v0/musicdl",
+    );
+    await expect(projectLink).toHaveAttribute("target", "_blank");
+    const navButtons = page.locator(".sidebar-bottom .nav-item");
+    await expect(navButtons).toHaveCount(3);
+    const boxes = [];
+    for (const button of await navButtons.all()) {
+      await expect(button).toBeVisible();
+      const box = await button.boundingBox();
+      assert.ok(box.width > 44 && box.height >= 44);
+      assert.ok(box.x >= 0 && box.x + box.width <= width);
+      for (const other of boxes)
+        assert.ok(
+          box.x >= other.x + other.width ||
+            other.x >= box.x + box.width ||
+            box.y >= other.y + other.height ||
+            other.y >= box.y + box.height,
+        );
+      boxes.push(box);
+    }
+    await expect(
+      page
+        .locator(".top")
+        .getByRole("button", { name: "音源设置", exact: true }),
+    ).toHaveCount(0);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({
     path: "../output/test-ui-bots-mobile.png",
     fullPage: true,
@@ -1147,6 +1202,17 @@ try {
   await page.getByRole("button", { name: "运行日志", exact: true }).click();
   await page.getByLabel("日志类别", { exact: true }).selectOption("playback");
   await expect(page.locator(".log-lines")).toContainText("MediaError=4");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/api/auth/status", (route) =>
+    route.fulfill({ json: { required: true, authenticated: false } }),
+  );
+  const logoutRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/api/auth/logout") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await logoutRequest;
+  await expect(page.getByRole("dialog", { name: "登录音乐库" })).toBeVisible();
   assert.deepEqual(errors, []);
   console.log(
     "Browser integration passed: search, real audio, lyric seeking, favorites, playlist, quality selection, queue controls, settings, responsive layout.",

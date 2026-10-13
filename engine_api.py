@@ -1066,4 +1066,5 @@ def install(old, root):
     import bot_notifications
     bot_notifications.install(old.app, get=get, put=put, values=values, remove=remove,
                               search=bot_search, enqueue=bot_enqueue, control=control_download,
-                              resolve=resolve_library_file, log=old.pushlog)
+                              resolve=resolve_library_file, log=old.pushlog,
+                              project_proxy=lambda: old.manager.config.get('proxy_url', ''))

@@ -229,10 +229,10 @@ def test_unsafe_api_requires_custom_header():
     assert allowed.status_code == 200
 
 
-def test_untrusted_host_is_rejected():
+def test_host_does_not_require_deployment_allowlist():
     with TestClient(app.app) as client:
-        response = client.get('/api/config', headers={'Host': 'evil.example'})
-    assert response.status_code == 400
+        response = client.get('/api/config', headers={'Host': 'music.example.com'})
+    assert response.status_code == 200
 
 
 def test_unicode_login_uses_random_revocable_session(monkeypatch):

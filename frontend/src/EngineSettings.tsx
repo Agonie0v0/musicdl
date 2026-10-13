@@ -361,10 +361,15 @@ export function EngineSettings({
         </div>
       </section>
       <section className="settings-section settings-proxy">
-        <h2>代理设置</h2>
+        <h2>项目代理</h2>
+        <p>
+          统一配置代理地址，音源和 Telegram
+          可分别选择使用。地址保存后持续显示，可随时修改。Docker
+          中请填写容器能够访问的地址。
+        </p>
         <div className="settings-grid">
           <label>
-            全局 HTTP / HTTPS 代理
+            项目 HTTP / HTTPS 代理
             <input
               value={config.proxy_url}
               onChange={(e) =>
@@ -374,14 +379,15 @@ export function EngineSettings({
             />
           </label>
           <label>
-            代理作用范围
+            音源代理作用范围
             <select
-              aria-label="代理作用范围"
+              aria-label="音源代理作用范围"
               value={config.proxy_scope}
               onChange={(e) =>
                 setConfig({ ...config, proxy_scope: e.target.value })
               }
             >
+              <option value="none">音源不使用代理</option>
               <option value="all">全部音源</option>
               <option value="selected">仅指定音源</option>
             </select>
@@ -469,7 +475,7 @@ export function EngineSettings({
         <h2>全部音源与账号设置</h2>
         <p>
           Cookie
-          为可选项。分源线程数和代理留空时使用全局设置；分源代理优先于全局代理。
+          为可选项。分源线程数留空时使用默认设置；每个音源可选择使用项目代理或直连。
         </p>
         <div className="source-picker-actions">
           <button
@@ -565,22 +571,53 @@ export function EngineSettings({
                     />
                   </label>
                   <label>
-                    分源 HTTP / HTTPS 代理
-                    <input
-                      value={String(proxies.https || proxies.http || "")}
+                    音源代理
+                    <select
+                      aria-label="音源代理"
+                      value={
+                        "proxies" in override
+                          ? "custom"
+                          : config.proxy_scope === "all" ||
+                              (config.proxy_scope === "selected" &&
+                                config.proxy_sources.includes(name))
+                            ? "project"
+                            : "direct"
+                      }
                       onChange={(e) => {
                         const next = { ...override };
-                        if (e.target.value.trim())
-                          next.proxies = {
-                            ...proxies,
-                            http: e.target.value,
-                            https: e.target.value,
-                          };
-                        else delete next.proxies;
+                        delete next.proxies;
                         updateAdvanced("requests_overrides", name, next);
+                        const selected =
+                          config.proxy_scope === "all"
+                            ? sources.map(
+                                (s) => s.engine_name || aliases[s.id] || s.id,
+                              )
+                            : config.proxy_scope === "selected"
+                              ? config.proxy_sources
+                              : [];
+                        setConfig({
+                          ...config,
+                          proxy_scope: "selected",
+                          proxy_sources:
+                            e.target.value === "project"
+                              ? [...new Set([...selected, name])]
+                              : selected.filter((v) => v !== name),
+                        });
                       }}
-                      placeholder="使用全局代理设置"
-                    />
+                    >
+                      <option value="direct">不使用代理</option>
+                      <option value="project">使用项目代理</option>
+                      {"proxies" in override && (
+                        <option value="custom">保留原有分源代理</option>
+                      )}
+                    </select>
+                    {"proxies" in override && (
+                      <small>
+                        原有配置：
+                        {String(proxies.https || proxies.http || "直连")}
+                        ；可在高级配置中修改。
+                      </small>
+                    )}
                   </label>
                 </div>
               </details>

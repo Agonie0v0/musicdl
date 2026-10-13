@@ -30,7 +30,6 @@ from urllib.parse import urlsplit
 import requests as pyrequests
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import secrets
 
@@ -372,7 +371,7 @@ class ClientManager:
             init_cfgs[source] = per_cfg
             threadings[source] = int(cfg['clients_threadings'].get(source, cfg.get('default_threads', 5)))
             overrides = dict(cfg['requests_overrides'].get(source, {}))
-            use_proxy = proxy_url and (proxy_scope == 'all' or source in proxy_sources)
+            use_proxy = proxy_url and (proxy_scope == 'all' or (proxy_scope == 'selected' and source in proxy_sources))
             if use_proxy and 'proxies' not in overrides:
                 overrides['proxies'] = {'http': proxy_url, 'https': proxy_url}
             timeout = int(cfg.get('request_timeout', 30) or 0)
@@ -537,10 +536,6 @@ AUTH_PASS_DIGEST = hashlib.sha256((AUTH_PASS or '').encode('utf-8')).digest()
 SESSION_COOKIE = 'musicdl_session'
 SESSION_TTL = max(300, int(os.environ.get('MUSICDL_SESSION_TTL', '43200')))
 COOKIE_SECURE = _env_flag('MUSICDL_COOKIE_SECURE', default=not IS_LOOPBACK_BIND)
-_trusted_hosts_raw = os.environ.get('MUSICDL_TRUSTED_HOSTS', 'localhost,127.0.0.1,::1,testserver')
-TRUSTED_HOSTS = [host.strip() for host in _trusted_hosts_raw.split(',') if host.strip()]
-if not TRUSTED_HOSTS or '*' in TRUSTED_HOSTS:
-    raise RuntimeError('MUSICDL_TRUSTED_HOSTS 必须是明确的主机名列表，不能留空或使用 *')
 SESSIONS: dict[str, float] = {}
 SESSION_LOCK = threading.Lock()
 LOGIN_FAILURES: dict[str, deque] = {}
@@ -549,7 +544,6 @@ LOGIN_WINDOW = 300
 LOGIN_MAX_FAILURES = 8
 UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
 
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
 
 
 def _client_key(request: Request) -> str:
@@ -799,6 +793,12 @@ def getconfig():
 def putconfig(body: ConfigBody):
     try:
         cfg = normalizeconfigpaths(body.model_dump())
+        proxy = cfg['proxy_url'].strip()
+        if proxy and (urlsplit(proxy).scheme not in {'http', 'https'} or not urlsplit(proxy).hostname):
+            raise ValueError('项目代理必须为 HTTP / HTTPS 地址')
+        if cfg['proxy_scope'] not in {'all', 'selected', 'none'}:
+            raise ValueError('无效的音源代理作用范围')
+        cfg['proxy_url'] = proxy
         manager.applyconfig(cfg)
     except Exception as err:
         raise HTTPException(400, f'配置未生效: {err}')
