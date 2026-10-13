@@ -117,14 +117,28 @@ export function BotSettings() {
       </div>
     );
   }
+  function draftPayload() {
+    const { configured, status, callback_url, ...values } = config!;
+    return {
+      ...values,
+      ...Object.fromEntries(
+        secretFields.map((key) => [key, secrets[key] || ""]),
+      ),
+      clear_secrets: clear,
+    };
+  }
   async function test(channel: "tg" | "wecom") {
     setBusy(true);
     setError("");
     setMessage("");
     try {
       setMessage(
-        (await api<{ detail: string }>("/bots/test", "POST", { channel }))
-          .detail,
+        (
+          await api<{ detail: string }>("/bots/test", "POST", {
+            channel,
+            config: draftPayload(),
+          })
+        ).detail,
       );
     } catch (e) {
       setError((e as Error).message);
@@ -141,15 +155,9 @@ export function BotSettings() {
         setError("");
         setMessage("");
         try {
-          const { configured, status, callback_url, ...values } = config;
-          const payload = {
-            ...values,
-            ...Object.fromEntries(
-              secretFields.map((key) => [key, secrets[key] || ""]),
-            ),
-            clear_secrets: clear,
-          };
-          setConfig(await api<BotConfig>("/bots/config", "PUT", payload));
+          setConfig(
+            await api<BotConfig>("/bots/config", "PUT", draftPayload()),
+          );
           setSecrets({});
           setClear([]);
           setDirty(false);
@@ -167,7 +175,7 @@ export function BotSettings() {
           机器人通过私聊命令搜索、下载，并返回原文件链接。文件不经过聊天附件上传，没有机器人附件大小限制。
         </p>
         <div className="settings-grid">
-          {field("public_url", "公网 HTTPS 地址", "https://music.example.com")}
+          {field("public_url", "公网访问地址", "http://192.168.1.20:8765")}
           <label>
             下载链接有效期（秒）
             <input
@@ -188,7 +196,8 @@ export function BotSettings() {
           )}
         </div>
         <p>
-          手机和企业微信需要能访问此 HTTPS 地址。设置保存在 data
+          支持 HTTP / HTTPS 域名或 IP，可带端口；省略协议时使用 HTTP。
+          请填写手机能访问的地址，企业微信回调还需平台可访问。设置保存在 data
           目录中，并覆盖对应环境变量。
         </p>
       </section>
@@ -206,14 +215,15 @@ export function BotSettings() {
           仅允许白名单用户私聊；企业微信白名单留空时允许应用可见成员。
         </p>
         <p>
-          连接测试只验证凭据，不发送消息。保存配置后再测试；下载和命令处理的错误可在“运行日志
-          → 通知与机器人”中查看。
+          连接测试使用当前填写的凭据和代理，无需先保存，也不会发送消息。
+          保存后机器人配置才会生效；下载和命令处理的错误可在“运行日志 →
+          通知与机器人”中查看。
         </p>
       </section>
       <section className="settings-section settings-behavior">
         <h2>
           Telegram 机器人{" "}
-          <small>{config.status.tg ? "已启用" : "未启用"}</small>
+          <small>运行状态：{config.status.tg ? "已启用" : "未启用"}</small>
         </h2>
         <label className="ready-filter">
           <input
@@ -253,7 +263,7 @@ export function BotSettings() {
         <button
           type="button"
           className="secondary"
-          disabled={busy || dirty || !config.status.tg}
+          disabled={busy}
           onClick={() => void test("tg")}
         >
           测试 Telegram 连接
@@ -262,7 +272,7 @@ export function BotSettings() {
       <section className="settings-section settings-sources">
         <h2>
           企业微信自建应用{" "}
-          <small>{config.status.wecom ? "已启用" : "未启用"}</small>
+          <small>运行状态：{config.status.wecom ? "已启用" : "未启用"}</small>
         </h2>
         <label className="ready-filter">
           <input
@@ -289,9 +299,11 @@ export function BotSettings() {
           <input
             readOnly
             value={
-              config.public_url
-                ? config.public_url.replace(/\/$/, "") + "/bot/wecom"
-                : "填写公网 HTTPS 地址后生成"
+              config.public_url.trim()
+                ? (config.public_url.includes("://") ? "" : "http://") +
+                  config.public_url.trim().replace(/\/$/, "") +
+                  "/bot/wecom"
+                : "填写公网访问地址后生成"
             }
           />
         </label>
@@ -304,7 +316,7 @@ export function BotSettings() {
         <button
           type="button"
           className="secondary"
-          disabled={busy || dirty || !config.status.wecom}
+          disabled={busy}
           onClick={() => void test("wecom")}
         >
           测试企业微信连接
@@ -317,7 +329,9 @@ export function BotSettings() {
           </p>
         )}
         {message && <p role="status">{message}</p>}
-        {dirty && <p className="muted">有未保存的修改。保存后再测试连接。</p>}
+        {dirty && (
+          <p className="muted">有未保存的修改，可先测试连接，保存后生效。</p>
+        )}
         <button className="primary" disabled={busy} type="submit">
           {busy ? "正在处理…" : "保存通知配置"}
         </button>

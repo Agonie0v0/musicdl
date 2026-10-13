@@ -46,6 +46,22 @@ CONFIG_DEFAULTS = {'public_url': '', 'link_ttl_seconds': 86400, 'bot_sources': '
 SECRET_FIELDS = {'tg_token', 'tg_proxy', 'wecom_secret', 'wecom_token', 'wecom_aes_key'}
 
 
+def public_origin(value):
+    base = value.strip()
+    if base and '://' not in base:
+        base = 'http://' + base
+    base = base.rstrip('/')
+    try:
+        url = urlsplit(base)
+        if (url.scheme not in {'http', 'https'} or not url.hostname or url.username is not None
+                or url.password is not None or url.query or url.fragment or url.path
+                or any(char.isspace() for char in base) or '\\' in base or url.port == 0):
+            raise ValueError()
+    except ValueError:
+        raise ValueError('访问地址必须是 HTTP / HTTPS 域名或 IP，可带端口，不能包含路径、账号或查询参数') from None
+    return base
+
+
 def concise(value, limit=32):
     text = re.sub(r'\s+', ' ', str(value or '')).strip()
     return text if len(text) <= limit else text[:limit - 1] + '…'
@@ -198,7 +214,7 @@ class DownloadLinks:
 
 
 class BotService:
-    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None, project_proxy=None):
+    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None, project_proxy=None, test_channel=None):
         self.get, self.put, self.values, self.remove = get, put, values, remove
         self.search, self.enqueue, self.control, self.log = search, enqueue, control, log
         self.config = {key: os.environ.get('MUSICDL_' + key.upper(), default) for key, default in CONFIG_DEFAULTS.items()}
@@ -210,6 +226,8 @@ class BotService:
             raise ValueError('无效的 Telegram 代理模式')
         cfg.setdefault('tg_enabled', bool(cfg['tg_token']))
         cfg.setdefault('wecom_enabled', bool(cfg['wecom_corp_id'] or cfg['wecom_agent_id'] or cfg['wecom_secret']))
+        if test_channel:
+            cfg['tg_enabled'], cfg['wecom_enabled'] = test_channel == 'tg', test_channel == 'wecom'
         self.tg_token = cfg['tg_token'].strip() if cfg['tg_enabled'] else ''
         self.tg_users = {x.strip() for x in cfg['tg_allowed_users'].split(',') if x.strip()}
         self.corp = cfg['wecom_corp_id'].strip() if cfg['wecom_enabled'] else ''
@@ -218,35 +236,40 @@ class BotService:
         self.wecom_users = {x.strip() for x in cfg['wecom_allowed_users'].split(',') if x.strip()}
         self.crypt = None
         self.enabled = bool(cfg['tg_enabled'] or cfg['wecom_enabled'])
-        base = cfg['public_url'].strip().rstrip('/')
-        if self.enabled or base:
-            url = urlsplit(base)
-            if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment or url.path:
-                raise ValueError('机器人需要 MUSICDL_PUBLIC_URL=https://域名（不含路径、凭据或查询参数）')
-            if cfg['tg_enabled'] and (not self.tg_token or not self.tg_users):
-                raise ValueError('请配置 MUSICDL_TG_ALLOWED_USERS（Telegram 数字用户 ID）')
-            if self.tg_token and any(not re.fullmatch(r'[1-9][0-9]*', u) for u in self.tg_users):
-                raise ValueError('MUSICDL_TG_ALLOWED_USERS 必须是数字用户 ID')
-            if cfg['wecom_enabled']:
-                if not self.corp or not self.agent.isdigit() or not self.secret:
-                    raise ValueError('企业微信需要 CorpID、AgentID 和 Secret')
+        base = ''
+        if not test_channel and (self.enabled or cfg['public_url'].strip()):
+            base = public_origin(cfg['public_url'])
+            cfg['public_url'] = base
+        if cfg['tg_enabled']:
+            if not self.tg_token:
+                raise ValueError('请填写 Telegram Bot Token')
+            if not test_channel and (not self.tg_users or any(not re.fullmatch(r'[1-9][0-9]*', u) for u in self.tg_users)):
+                raise ValueError('请配置 MUSICDL_TG_ALLOWED_USERS（Telegram 数字用户 ID 白名单）')
+        if cfg['wecom_enabled']:
+            if not self.corp or not self.agent.isdigit() or not self.secret:
+                raise ValueError('企业微信需要 CorpID、AgentID 和 Secret')
+            if not test_channel:
                 token = cfg['wecom_token'].strip()
                 if not token:
                     raise ValueError('请配置 MUSICDL_WECOM_TOKEN')
                 self.crypt = WecomCrypt(token, cfg['wecom_aes_key'].strip(), self.corp)
-        ttl = int(cfg['link_ttl_seconds'])
+        ttl = int(cfg['link_ttl_seconds']) if not test_channel else 86400
         if not 60 <= ttl <= 604800:
             raise ValueError('下载链接有效期须为 60–604800 秒')
         cfg['link_ttl_seconds'] = ttl
         # Disabling command intake must not invalidate already issued links.
         self.links = DownloadLinks(get, put, resolve, base, ttl) if base else None
         self.sources = list(filter(None, (s.strip() for s in cfg['bot_sources'].split(','))))
-        self.tg_http, self.wecom_http = requests.Session(), requests.Session()
-        proxy = self.telegram_proxy()
-        self.tg_http.trust_env = False
+        proxy = self.telegram_proxy() if not test_channel or test_channel == 'tg' else ''
         if proxy:
-            if urlsplit(proxy).scheme not in {'http', 'https'} or not urlsplit(proxy).hostname:
-                raise ValueError('Telegram 代理必须为 HTTP / HTTPS 地址')
+            try:
+                url = urlsplit(proxy)
+                if url.scheme not in {'http', 'https'} or not url.hostname or url.port == 0:
+                    raise ValueError()
+            except ValueError:
+                raise ValueError('Telegram 代理必须为有效的 HTTP / HTTPS 地址和端口') from None
+        self.tg_http, self.wecom_http = requests.Session(), requests.Session()
+        self.tg_http.trust_env = False
         self.access_token, self.token_until = '', 0
         self.tasks = []
         self.tg_poll = None
@@ -695,36 +718,43 @@ def install(app, **services):
     def read_config():
         return bot.public_config()
 
+    def configured_bot(body, test_channel=None):
+        if not isinstance(body, dict):
+            raise HTTPException(400, '配置必须为对象')
+        cfg = dict(bot.config)
+        clear = body.get('clear_secrets', [])
+        if not isinstance(clear, list) or any(key not in SECRET_FIELDS for key in clear):
+            raise HTTPException(400, '清除密钥字段无效')
+        for key, value in body.items():
+            if key == 'clear_secrets':
+                continue
+            if key not in cfg:
+                raise HTTPException(400, '不支持的机器人配置字段')
+            if key in {'tg_enabled', 'wecom_enabled'}:
+                if not isinstance(value, bool):
+                    raise HTTPException(400, '启用状态必须为布尔值')
+            elif key == 'link_ttl_seconds':
+                if type(value) is not int:
+                    raise HTTPException(400, '链接有效期必须为整数秒')
+            elif not isinstance(value, str) or len(value) > 4096:
+                raise HTTPException(400, '配置字段必须为不超过 4096 字符的文本')
+            if key not in SECRET_FIELDS or value:
+                cfg[key] = value.strip() if isinstance(value, str) else value
+        for key in clear:
+            cfg[key] = ''
+        try:
+            candidate = BotService(**services, config=cfg, test_channel=test_channel)
+        except (ValueError, TypeError) as error:
+            bot.log('warning', f'通知渠道配置验证失败：{bot.error_detail(error)}', category='bot')
+            raise HTTPException(400, '通知渠道配置无效：' + bot.error_detail(error))
+        return candidate
+
     @router.put('/api/bots/config')
     async def write_config(body: dict):
         nonlocal bot
         async with config_lock:
-            cfg = dict(bot.config)
-            clear = body.get('clear_secrets', [])
-            if not isinstance(clear, list) or any(key not in SECRET_FIELDS for key in clear):
-                raise HTTPException(400, '清除密钥字段无效')
-            for key, value in body.items():
-                if key == 'clear_secrets':
-                    continue
-                if key not in cfg:
-                    raise HTTPException(400, '不支持的机器人配置字段')
-                if key in {'tg_enabled', 'wecom_enabled'}:
-                    if not isinstance(value, bool):
-                        raise HTTPException(400, '启用状态必须为布尔值')
-                elif key == 'link_ttl_seconds':
-                    if type(value) is not int:
-                        raise HTTPException(400, '链接有效期必须为整数秒')
-                elif not isinstance(value, str) or len(value) > 4096:
-                    raise HTTPException(400, '配置字段必须为不超过 4096 字符的文本')
-                if key not in SECRET_FIELDS or value:
-                    cfg[key] = value.strip() if isinstance(value, str) else value
-            for key in clear:
-                cfg[key] = ''
-            try:
-                candidate = BotService(**services, config=cfg)
-            except (ValueError, TypeError) as error:
-                bot.log('warning', f'通知渠道配置验证失败：{bot.error_detail(error)}', category='bot')
-                raise HTTPException(400, '通知渠道配置无效：' + bot.error_detail(error))
+            candidate = configured_bot(body)
+            cfg = candidate.config
             # Validate completely before replacing a working service.
             services['put']('bot_setting', 'config', cfg)
             await bot.stop()
@@ -741,18 +771,26 @@ def install(app, **services):
     async def test_connection(body: dict):
         async with config_lock:
             channel = body.get('channel')
-            if channel == 'tg' and bot.tg_token:
-                check = lambda: bot.telegram('getMe', {})
-            elif channel == 'wecom' and bot.crypt:
-                check = bot.wecom_access
-            else:
-                raise HTTPException(400, '请先保存并启用对应渠道')
+            if channel not in ('tg', 'wecom'):
+                raise HTTPException(400, '不支持的通知渠道')
+            candidate = configured_bot(body['config'], test_channel=channel) if 'config' in body else bot
             try:
-                await asyncio.to_thread(check)
-            except Exception as error:
-                detail = bot.error_detail(error)
-                bot.log('error', f'{channel} 连接测试失败：{detail}', category='bot')
-                raise HTTPException(502, f'连接测试失败：{detail}')
+                if channel == 'tg' and candidate.tg_token:
+                    check = lambda: candidate.telegram('getMe', {})
+                elif channel == 'wecom' and candidate.secret:
+                    check = candidate.wecom_access
+                else:
+                    raise HTTPException(400, '请填写对应渠道的凭据后测试')
+                try:
+                    await asyncio.to_thread(check)
+                except Exception as error:
+                    detail = candidate.error_detail(error)
+                    bot.log('error', f'{channel} 连接测试失败：{detail}', category='bot')
+                    raise HTTPException(502, f'连接测试失败：{detail}')
+            finally:
+                if candidate is not bot:
+                    candidate.tg_http.close()
+                    candidate.wecom_http.close()
             bot.log('info', f'{channel} 连接测试成功', category='bot')
             return {'detail': '连接测试成功；凭据可用。企业微信回调和白名单成员权限请在平台单独验证。' if channel == 'wecom' else '连接测试成功；机器人凭据可用，未发送消息。'}
 

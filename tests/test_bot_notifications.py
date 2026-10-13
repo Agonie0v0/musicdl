@@ -524,8 +524,8 @@ def test_fail_closed_config_and_utf8_message_limit(setup_bot, monkeypatch):
     with pytest.raises(ValueError, match='ALLOWED_USERS'):
         type(bot)(store.get, store.put, store.values, store.remove, bot.search, bot.enqueue, bot.control, bot.links.resolve, bot.log)
     monkeypatch.setenv('MUSICDL_TG_ALLOWED_USERS', '123')
-    monkeypatch.setenv('MUSICDL_PUBLIC_URL', 'http://music.example.com')
-    with pytest.raises(ValueError, match='PUBLIC_URL'):
+    monkeypatch.setenv('MUSICDL_PUBLIC_URL', 'ftp://music.example.com')
+    with pytest.raises(ValueError, match='访问地址'):
         type(bot)(store.get, store.put, store.values, store.remove, bot.search, bot.enqueue, bot.control, bot.links.resolve, bot.log)
 
 
@@ -657,3 +657,101 @@ def test_proxy_mode_migration_save_and_restart(setup_bot, monkeypatch):
     assert restored.telegram_proxy() == 'http://project-proxy.example:8080'
     assert client.put('/api/bots/config', json={'tg_proxy_mode': 'invalid'}).status_code == 400
     assert store.get('bot_setting', 'config')['tg_proxy_mode'] == 'project'
+
+
+@pytest.mark.parametrize('address, expected', [
+    ('http://192.168.1.20:8765', 'http://192.168.1.20:8765'),
+    ('192.168.1.20:8765', 'http://192.168.1.20:8765'),
+    ('  http://music.example.com:8080/  ', 'http://music.example.com:8080'),
+    ('https://music.example.com/', 'https://music.example.com'),
+    ('[2001:db8::1]:8765', 'http://[2001:db8::1]:8765'),
+])
+def test_http_and_ip_origin_save_and_signed_download(setup_bot, monkeypatch, address, expected):
+    app, bot, store, audio, track = setup_bot
+    monkeypatch.setattr(BotService, 'start', AsyncMock())
+    monkeypatch.setattr(BotService, 'stop', AsyncMock())
+    client = TestClient(app)
+    response = client.put('/api/bots/config', json={'public_url': address})
+    assert response.status_code == 200, response.text
+    assert response.json()['public_url'] == expected
+    assert response.json()['callback_url'] == expected + '/bot/wecom'
+    assert store.get('bot_setting', 'config')['public_url'] == expected
+    link = app.state.bots.links.create(completed_job(audio, track))
+    assert link.startswith(expected + '/downloads/')
+    parsed = urlsplit(link)
+    assert client.get(parsed.path + '?' + parsed.query).content == audio.read_bytes()
+
+
+@pytest.mark.parametrize('address', ['', 'ftp://music.example.com', 'http://',
+    'http://user:password@music.example.com', 'http://music.example.com/path',
+    'http://music.example.com?x=1', 'http://music.example.com#test',
+    'http://192.168.1.20:bad', 'http://192.168.1.20:65536', 'http://bad host:8765'])
+def test_invalid_origin_keeps_saved_service(setup_bot, address):
+    app, bot, store, _, _ = setup_bot
+    response = TestClient(app).put('/api/bots/config', json={'public_url': address})
+    assert response.status_code == 400
+    assert '访问地址' in response.json()['detail']
+    assert app.state.bots is bot
+    assert store.get('bot_setting', 'config') is None
+
+
+def test_draft_test_uses_current_token_without_saving_or_enabling(setup_bot, monkeypatch):
+    app, bot, store, _, _ = setup_bot
+    before = copy.deepcopy(store.records)
+    start, send = AsyncMock(), Mock()
+    monkeypatch.setattr(BotService, 'start', start)
+    monkeypatch.setattr(BotService, 'send', send)
+    def check(candidate, method, body, timeout=15):
+        assert candidate.tg_token == 'draft-token'
+        assert candidate.telegram_proxy() == 'http://draft-proxy.example:8080'
+        assert method == 'getMe' and body == {}
+        return {'username': 'draftbot'}
+    monkeypatch.setattr(BotService, 'telegram', check)
+    client = TestClient(app)
+    draft = {'public_url': '', 'tg_enabled': False, 'tg_token': 'draft-token',
+             'tg_allowed_users': '', 'tg_proxy_mode': 'custom', 'tg_proxy': 'http://draft-proxy.example:8080'}
+    response = client.post('/api/bots/test', json={'channel': 'tg', 'config': draft})
+    assert response.status_code == 200, response.text
+    assert store.records == before and app.state.bots is bot
+    assert bot.tg_token == 'test-token'
+    start.assert_not_called()
+    send.assert_not_called()
+    # Saving still requires an address and an allowlist before command intake starts.
+    assert client.put('/api/bots/config', json={**draft, 'tg_enabled': True}).status_code == 400
+
+
+def test_draft_test_redacts_unsaved_credentials_and_honors_clear(setup_bot, monkeypatch):
+    app, bot, store, _, _ = setup_bot
+    def fail(candidate, *args):
+        raise RuntimeError('HTTP 401 draft-secret https://api.telegram.org/botdraft-secret/getMe')
+    monkeypatch.setattr(BotService, 'telegram', fail)
+    client = TestClient(app)
+    response = client.post('/api/bots/test', json={'channel': 'tg', 'config': {'tg_token': 'draft-secret'}})
+    assert response.status_code == 502
+    assert 'draft-secret' not in response.text and 'draft-secret' not in str(bot.log.call_args)
+    response = client.post('/api/bots/test', json={'channel': 'tg', 'config': {'clear_secrets': ['tg_token']}})
+    assert response.status_code == 400 and 'Token' in response.text
+    assert store.get('bot_setting', 'config') is None
+
+
+def test_wecom_draft_connection_needs_no_callback_config(setup_bot, monkeypatch):
+    app, bot, store, _, _ = setup_bot
+    def check(candidate):
+        assert candidate.corp == 'draft-corp' and candidate.secret == 'draft-secret'
+        assert candidate.crypt is None
+        return 'access-token'
+    monkeypatch.setattr(BotService, 'wecom_access', check)
+    response = TestClient(app).post('/api/bots/test', json={'channel': 'wecom', 'config': {
+        'wecom_corp_id': 'draft-corp', 'wecom_agent_id': '100001', 'wecom_secret': 'draft-secret',
+        'public_url': '', 'wecom_enabled': False, 'wecom_token': '', 'wecom_aes_key': ''}})
+    assert response.status_code == 200, response.text
+    assert app.state.bots is bot and store.get('bot_setting', 'config') is None
+
+
+def test_invalid_draft_proxy_does_not_echo_credentials(setup_bot):
+    app, bot, _, _, _ = setup_bot
+    response = TestClient(app).post('/api/bots/test', json={'channel': 'tg', 'config': {
+        'tg_proxy_mode': 'custom', 'tg_proxy': 'http://draft-user:draft-password@proxy.example：8080'}})
+    assert response.status_code == 400
+    assert 'draft-password' not in response.text and 'draft-user' not in response.text
+    assert 'draft-password' not in str(bot.log.call_args)

@@ -225,6 +225,8 @@ try {
     status: { tg: false, wecom: false },
     callback_url: "",
   };
+  let botSaves = 0;
+  const botTests = [];
   const searchRequests = [],
     cancelledSearches = [],
     searchKeywords = new Map(),
@@ -238,7 +240,10 @@ try {
     else if (p === "/auth/logout") result = { success: true };
     else if (p === "/bots/config") {
       if (method === "PUT") {
+        botSaves++;
         const { clear_secrets, ...draft } = request.postDataJSON();
+        if (draft.public_url && !draft.public_url.includes("://"))
+          draft.public_url = "http://" + draft.public_url;
         const secretKeys = [
           "tg_token",
           "tg_proxy",
@@ -259,9 +264,10 @@ try {
         };
       }
       result = botConfig;
-    } else if (p === "/bots/test")
+    } else if (p === "/bots/test") {
+      botTests.push(request.postDataJSON());
       result = { detail: "连接测试成功；未发送消息。" };
-    else if (p === "/playback/events") {
+    } else if (p === "/playback/events") {
       const report = request.postDataJSON();
       playbackReports.push(report);
       logEntries.push({
@@ -1073,18 +1079,44 @@ try {
   await expect(page.locator(".saved-playlist")).toHaveCount(0);
   await expect(page.locator(".library-empty")).toBeVisible();
   await page.getByRole("button", { name: "通知与机器人", exact: true }).click();
-  await page
-    .getByLabel("公网 HTTPS 地址", { exact: true })
-    .fill("https://music.example.com");
-  await page.getByLabel("启用 Telegram", { exact: true }).check();
+  await expect(
+    page.getByRole("button", { name: "测试 Telegram 连接", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "测试企业微信连接", exact: true }),
+  ).toBeEnabled();
   await page
     .getByLabel("Telegram Bot Token", { exact: true })
     .fill("fixture-bot-token");
-  await page.getByLabel("Telegram 用户白名单", { exact: true }).fill("123456");
   await page
     .getByLabel("Telegram 代理", { exact: true })
     .selectOption("project");
-  await page.getByLabel("启用企业微信", { exact: true }).check();
+  await page
+    .getByRole("button", { name: "测试 Telegram 连接", exact: true })
+    .click();
+  await expect(
+    page.getByText("连接测试成功；未发送消息。", { exact: true }),
+  ).toBeVisible();
+  assert.equal(botSaves, 0, "testing does not save the draft");
+  assert.equal(botTests.length, 1);
+  assert.equal(botTests[0].channel, "tg");
+  assert.equal(botTests[0].config.tg_token, "fixture-bot-token");
+  assert.equal(botTests[0].config.tg_proxy_mode, "project");
+  assert.equal(botTests[0].config.public_url, "");
+  assert.equal(botTests[0].config.tg_allowed_users, "");
+  assert.equal(botTests[0].config.tg_enabled, false);
+  assert.deepEqual(botTests[0].config.clear_secrets, []);
+  await expect(
+    page.getByLabel("Telegram Bot Token", { exact: true }),
+  ).toHaveValue("fixture-bot-token");
+  await page
+    .getByLabel("公网访问地址", { exact: true })
+    .fill("192.168.1.20:8765");
+  await expect(
+    page.getByLabel("企业微信回调地址", { exact: true }),
+  ).toHaveValue("http://192.168.1.20:8765/bot/wecom");
+  await page.getByLabel("启用 Telegram", { exact: true }).check();
+  await page.getByLabel("Telegram 用户白名单", { exact: true }).fill("123456");
   await page
     .getByLabel("企业微信 CorpID", { exact: true })
     .fill("corp-fixture");
@@ -1092,6 +1124,23 @@ try {
   await page
     .getByLabel("企业微信 Secret", { exact: true })
     .fill("fixture-secret");
+  await page
+    .getByRole("button", { name: "测试企业微信连接", exact: true })
+    .click();
+  await expect(
+    page.getByText("连接测试成功；未发送消息。", { exact: true }),
+  ).toBeVisible();
+  assert.equal(botSaves, 0);
+  assert.equal(botTests.length, 2);
+  assert.equal(botTests[1].channel, "wecom");
+  assert.equal(botTests[1].config.wecom_corp_id, "corp-fixture");
+  assert.equal(botTests[1].config.wecom_agent_id, "100001");
+  assert.equal(botTests[1].config.wecom_secret, "fixture-secret");
+  assert.equal(botTests[1].config.wecom_enabled, false);
+  assert.equal(botTests[1].config.wecom_allowed_users, "");
+  assert.equal(botTests[1].config.wecom_token, "");
+  assert.equal(botTests[1].config.wecom_aes_key, "");
+  await page.getByLabel("启用企业微信", { exact: true }).check();
   await page
     .getByLabel("企业微信回调 Token", { exact: true })
     .fill("fixture-token");
@@ -1106,9 +1155,13 @@ try {
   await expect(
     page.getByLabel("Telegram Bot Token", { exact: true }),
   ).toHaveValue("");
+  assert.equal(botSaves, 1);
+  await expect(page.getByLabel("公网访问地址", { exact: true })).toHaveValue(
+    "http://192.168.1.20:8765",
+  );
   await expect(
     page.getByLabel("企业微信回调地址", { exact: true }),
-  ).toHaveValue("https://music.example.com/bot/wecom");
+  ).toHaveValue("http://192.168.1.20:8765/bot/wecom");
   await page
     .getByRole("button", { name: "测试 Telegram 连接", exact: true })
     .click();
@@ -1121,6 +1174,10 @@ try {
   await expect(
     page.getByText("连接测试成功；未发送消息。", { exact: true }),
   ).toBeVisible();
+  assert.equal(botTests.length, 4);
+  assert.equal(botTests[2].config.tg_token, "");
+  assert.equal(botTests[3].config.wecom_secret, "");
+  assert.equal(botSaves, 1);
   await expect(page.getByLabel("Telegram 代理", { exact: true })).toHaveValue(
     "project",
   );
