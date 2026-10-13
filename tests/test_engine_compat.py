@@ -52,7 +52,10 @@ def test_bot_uses_shared_engine_queue_and_signed_link_without_web_login(monkeypa
     monkeypatch.setattr(bot, 'links', DownloadLinks(bot.get, bot.put, bot.links.resolve if bot.links else
                        lambda token: app.original.resolvefile(*json.loads(token)), 'https://music.example.com', 86400))
     message = {'id': 'd' * 64, 'channel': 'tg', 'user': '123', 'text': '/search bot-fixture'}
-    asyncio.run(bot.command(message))
+    async def search():
+        await bot.command(message)
+        await asyncio.gather(*bot.search_tasks.values())
+    asyncio.run(search())
     message.update(id='e' * 64, text='/download dddddddd 1')
     asyncio.run(bot.command(message))
     ident = 'e' * 32
@@ -63,6 +66,8 @@ def test_bot_uses_shared_engine_queue_and_signed_link_without_web_login(monkeypa
             break
         time.sleep(.2)
     assert job['status'] == 'complete', job
+    from local_library import download_stem
+    assert Path(json.loads(job['file'])[1]).stem.startswith(download_stem(job['track']['title'], job['track']['artist']))
     assert bot.get('bot_task', ident)['owner'] == 'tg:123'
     # Normal APIs remain session protected; only the signed route is public.
     monkeypatch.setattr(app.original, 'AUTH_ENABLED', True)

@@ -215,6 +215,7 @@ try {
     link_ttl_seconds: 86400,
     bot_sources: "",
     tg_enabled: false,
+    tg_api_url: "https://api.telegram.org",
     tg_proxy_mode: "direct",
     wecom_enabled: false,
     tg_allowed_users: "",
@@ -806,8 +807,11 @@ try {
   await page.getByLabel("下载 测试曲目", { exact: true }).click();
   await page.getByRole("dialog").getByLabel("关闭", { exact: true }).click();
   await page.getByRole("button", { name: "音源与设置", exact: true }).click();
-  await page.locator(".source-setting").first().waitFor();
+  await page.locator(".source-setting").first().waitFor({ state: "attached" });
   assert.equal(await page.locator(".source-setting").count(), 8);
+  const sourceDisclosure = page.locator(".settings-sources .source-disclosure");
+  await expect(sourceDisclosure).not.toHaveAttribute("open");
+  await sourceDisclosure.locator("summary").first().click();
   await expect(page.locator(".settings-advanced")).not.toHaveAttribute("open");
   await page.getByRole("button", { name: "取消全选", exact: true }).click();
   await expect(
@@ -831,6 +835,9 @@ try {
   await page
     .getByLabel("音源代理作用范围", { exact: true })
     .selectOption("selected");
+  const proxyDisclosure = page.locator(".settings-proxy .source-disclosure");
+  await expect(proxyDisclosure).not.toHaveAttribute("open");
+  await proxyDisclosure.locator("summary").click();
   await page.getByRole("button", { name: "选择推荐音源", exact: true }).click();
   await expect(
     page.locator(".source-picker").getByLabel("YouTube", { exact: false }),
@@ -911,6 +918,24 @@ try {
     page.locator(".settings-save").getByRole("status"),
   ).toContainText("全部设置已保存并生效");
   await page.locator(".settings-advanced > summary").click();
+  await sourceDisclosure
+    .getByRole("button", { name: "完成选择，收起" })
+    .click();
+  await proxyDisclosure.getByRole("button", { name: "完成选择，收起" }).click();
+  await expect(sourceDisclosure).not.toHaveAttribute("open");
+  await expect(proxyDisclosure).not.toHaveAttribute("open");
+  await expect(proxyDisclosure.locator("summary")).toContainText("已选 2 个");
+  const numberWidth = await page
+    .getByLabel("每页大小", { exact: true })
+    .evaluate((el) => el.getBoundingClientRect().width);
+  assert.ok(numberWidth <= 120, "numeric settings remain compact");
+  const playerBackground = await page
+    .locator(".player")
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  assert.ok(
+    playerBackground.includes("0.76"),
+    "player background is translucent",
+  );
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => scrollTo(0, 0));
   for (const width of [768, 1200, 1440, 1920, 2560]) {

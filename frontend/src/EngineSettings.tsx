@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 import { api } from "./api";
+import { SourceDisclosure } from "./SourceDisclosure";
 
 type JsonObject = Record<string, unknown>;
 interface EngineConfig {
@@ -394,7 +395,9 @@ export function EngineSettings({
           </label>
         </div>
         {config.proxy_scope === "selected" && (
-          <>
+          <SourceDisclosure
+            summary={`代理音源 · 已选 ${config.proxy_sources.length} 个`}
+          >
             <p>
               推荐适用于中国大陆部署：优先为海外平台和海外聚合站使用代理，国内音源保持直连。实际可访问性取决于部署网络，可继续手动调整。
             </p>
@@ -450,7 +453,7 @@ export function EngineSettings({
                 );
               })}
             </fieldset>
-          </>
+          </SourceDisclosure>
         )}
       </section>
       <section className="settings-section settings-behavior">
@@ -477,153 +480,161 @@ export function EngineSettings({
           Cookie
           为可选项。分源线程数留空时使用默认设置；每个音源可选择使用项目代理或直连。
         </p>
-        <div className="source-picker-actions">
-          <button
-            type="button"
-            className="secondary"
-            onClick={() =>
-              setConfig({
-                ...config,
-                music_sources: sources.map(
-                  (s) => s.engine_name || aliases[s.id] || s.id,
-                ),
-              })
-            }
-          >
-            全选
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => setConfig({ ...config, music_sources: [] })}
-          >
-            取消全选
-          </button>
-          <span>{config.music_sources.length} 个音源已选择</span>
-        </div>
-        <div className="source-settings-grid">
-          {sources.map((source) => {
-            const name = source.engine_name || aliases[source.id] || source.id;
-            const override =
-              (advancedMap("requests_overrides")[name] as JsonObject) || {};
-            const proxies = (override.proxies as JsonObject) || {};
-            return (
-              <details key={source.id} className="source-setting">
-                <summary>
-                  <span>{source.label}</span>
-                  <label
-                    className="check-label"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <input
-                      type="checkbox"
-                      aria-label={`启用 ${source.label}`}
-                      checked={config.music_sources.includes(name)}
+        <SourceDisclosure
+          summary={`搜索音源与账号 · 已选 ${config.music_sources.length} / ${sources.length} 个`}
+        >
+          <div className="source-picker-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() =>
+                setConfig({
+                  ...config,
+                  music_sources: sources.map(
+                    (s) => s.engine_name || aliases[s.id] || s.id,
+                  ),
+                })
+              }
+            >
+              全选
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setConfig({ ...config, music_sources: [] })}
+            >
+              取消全选
+            </button>
+            <span>{config.music_sources.length} 个音源已选择</span>
+          </div>
+          <div className="source-settings-grid">
+            {sources.map((source) => {
+              const name =
+                source.engine_name || aliases[source.id] || source.id;
+              const override =
+                (advancedMap("requests_overrides")[name] as JsonObject) || {};
+              const proxies = (override.proxies as JsonObject) || {};
+              return (
+                <details key={source.id} className="source-setting">
+                  <summary>
+                    <span>{source.label}</span>
+                    <label
+                      className="check-label"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`启用 ${source.label}`}
+                        checked={config.music_sources.includes(name)}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            music_sources: e.target.checked
+                              ? [...config.music_sources, name]
+                              : config.music_sources.filter((v) => v !== name),
+                          })
+                        }
+                      />
+                    </label>
+                  </summary>
+                  {source.init_error && (
+                    <p className="setting-help" role="status">
+                      暂不可用：{source.init_error}。补全配置后再次保存。
+                    </p>
+                  )}
+                  <label>
+                    Cookie
+                    <textarea
+                      spellCheck={false}
+                      autoComplete="off"
+                      value={cookieText(config.cookies[name])}
                       onChange={(e) =>
                         setConfig({
                           ...config,
-                          music_sources: e.target.checked
-                            ? [...config.music_sources, name]
-                            : config.music_sources.filter((v) => v !== name),
+                          cookies: {
+                            ...config.cookies,
+                            [name]: e.target.value,
+                          },
                         })
                       }
+                      placeholder="未配置账号"
                     />
                   </label>
-                </summary>
-                {source.init_error && (
-                  <p className="setting-help" role="status">
-                    暂不可用：{source.init_error}。补全配置后再次保存。
-                  </p>
-                )}
-                <label>
-                  Cookie
-                  <textarea
-                    spellCheck={false}
-                    autoComplete="off"
-                    value={cookieText(config.cookies[name])}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        cookies: { ...config.cookies, [name]: e.target.value },
-                      })
-                    }
-                    placeholder="未配置账号"
-                  />
-                </label>
-                <div className="settings-grid">
-                  <label>
-                    分源下载线程数
-                    <input
-                      type="number"
-                      min="1"
-                      max="50"
-                      value={String(
-                        advancedMap("clients_threadings")[name] ?? "",
-                      )}
-                      onChange={(e) =>
-                        updateAdvanced(
-                          "clients_threadings",
-                          name,
-                          e.target.value ? Number(e.target.value) : undefined,
-                        )
-                      }
-                      placeholder="使用默认线程数"
-                    />
-                  </label>
-                  <label>
-                    音源代理
-                    <select
-                      aria-label="音源代理"
-                      value={
-                        "proxies" in override
-                          ? "custom"
-                          : config.proxy_scope === "all" ||
-                              (config.proxy_scope === "selected" &&
-                                config.proxy_sources.includes(name))
-                            ? "project"
-                            : "direct"
-                      }
-                      onChange={(e) => {
-                        const next = { ...override };
-                        delete next.proxies;
-                        updateAdvanced("requests_overrides", name, next);
-                        const selected =
-                          config.proxy_scope === "all"
-                            ? sources.map(
-                                (s) => s.engine_name || aliases[s.id] || s.id,
-                              )
-                            : config.proxy_scope === "selected"
-                              ? config.proxy_sources
-                              : [];
-                        setConfig({
-                          ...config,
-                          proxy_scope: "selected",
-                          proxy_sources:
-                            e.target.value === "project"
-                              ? [...new Set([...selected, name])]
-                              : selected.filter((v) => v !== name),
-                        });
-                      }}
-                    >
-                      <option value="direct">不使用代理</option>
-                      <option value="project">使用项目代理</option>
+                  <div className="settings-grid">
+                    <label>
+                      分源下载线程数
+                      <input
+                        type="number"
+                        min="1"
+                        max="50"
+                        value={String(
+                          advancedMap("clients_threadings")[name] ?? "",
+                        )}
+                        onChange={(e) =>
+                          updateAdvanced(
+                            "clients_threadings",
+                            name,
+                            e.target.value ? Number(e.target.value) : undefined,
+                          )
+                        }
+                        placeholder="使用默认线程数"
+                      />
+                    </label>
+                    <label>
+                      音源代理
+                      <select
+                        aria-label="音源代理"
+                        value={
+                          "proxies" in override
+                            ? "custom"
+                            : config.proxy_scope === "all" ||
+                                (config.proxy_scope === "selected" &&
+                                  config.proxy_sources.includes(name))
+                              ? "project"
+                              : "direct"
+                        }
+                        onChange={(e) => {
+                          const next = { ...override };
+                          delete next.proxies;
+                          updateAdvanced("requests_overrides", name, next);
+                          const selected =
+                            config.proxy_scope === "all"
+                              ? sources.map(
+                                  (s) => s.engine_name || aliases[s.id] || s.id,
+                                )
+                              : config.proxy_scope === "selected"
+                                ? config.proxy_sources
+                                : [];
+                          setConfig({
+                            ...config,
+                            proxy_scope: "selected",
+                            proxy_sources:
+                              e.target.value === "project"
+                                ? [...new Set([...selected, name])]
+                                : selected.filter((v) => v !== name),
+                          });
+                        }}
+                      >
+                        <option value="direct">不使用代理</option>
+                        <option value="project">使用项目代理</option>
+                        {"proxies" in override && (
+                          <option value="custom">保留原有分源代理</option>
+                        )}
+                      </select>
                       {"proxies" in override && (
-                        <option value="custom">保留原有分源代理</option>
+                        <small>
+                          原有配置：
+                          {String(proxies.https || proxies.http || "直连")}
+                          ；可在高级配置中修改。
+                        </small>
                       )}
-                    </select>
-                    {"proxies" in override && (
-                      <small>
-                        原有配置：
-                        {String(proxies.https || proxies.http || "直连")}
-                        ；可在高级配置中修改。
-                      </small>
-                    )}
-                  </label>
-                </div>
-              </details>
-            );
-          })}
-        </div>
+                    </label>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        </SourceDisclosure>
       </section>
       <details
         className="settings-section settings-advanced"

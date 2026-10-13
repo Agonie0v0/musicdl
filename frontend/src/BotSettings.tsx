@@ -6,6 +6,7 @@ type BotConfig = {
   link_ttl_seconds: number;
   bot_sources: string;
   tg_enabled: boolean;
+  tg_api_url: string;
   tg_proxy_mode: "direct" | "project" | "custom";
   wecom_enabled: boolean;
   tg_allowed_users: string;
@@ -15,6 +16,9 @@ type BotConfig = {
   configured: Record<string, boolean>;
   status: { tg: boolean; wecom: boolean };
   callback_url: string;
+  discord_enabled: boolean;
+  feishu_enabled: boolean;
+  dingtalk_enabled: boolean;
 };
 const secretFields = [
   "tg_token",
@@ -22,6 +26,11 @@ const secretFields = [
   "wecom_secret",
   "wecom_token",
   "wecom_aes_key",
+  "discord_webhook",
+  "feishu_webhook",
+  "feishu_sign_secret",
+  "dingtalk_webhook",
+  "dingtalk_sign_secret",
 ];
 
 export function BotSettings() {
@@ -127,7 +136,9 @@ export function BotSettings() {
       clear_secrets: clear,
     };
   }
-  async function test(channel: "tg" | "wecom") {
+  async function test(
+    channel: "tg" | "wecom" | "discord" | "feishu" | "dingtalk",
+  ) {
     setBusy(true);
     setError("");
     setMessage("");
@@ -170,9 +181,10 @@ export function BotSettings() {
       }}
     >
       <section className="settings-section settings-basics">
-        <h2>下载链接</h2>
+        <h2>文件交付与下载链接</h2>
         <p>
-          机器人通过私聊命令搜索、下载，并返回原文件链接。文件不经过聊天附件上传，没有机器人附件大小限制。
+          Telegram 和企业微信选择曲目后直接发送原文件。Telegram 的 MP3 / M4A
+          可直接播放，其他格式以文件发送。超出附件上限时使用下载链接。
         </p>
         <div className="settings-grid">
           {field("public_url", "公网访问地址", "http://192.168.1.20:8765")}
@@ -203,16 +215,16 @@ export function BotSettings() {
       </section>
       <section className="settings-section settings-proxy">
         <h2>使用方式</h2>
-        <p>
-          搜索歌名歌手 → 打开网页试听确认版本 → 选择编号下载 → 收到下载链接。
-        </p>
+        <p>搜索歌名歌手 → 切换音源 → 选择编号下载 → 收到音频或原文件。</p>
         <p>
           Telegram 发送 /start 或 /menu 打开功能菜单，也可直接发送歌名搜索。
-          输入框旁的菜单会自动注册；搜索结果每页 5 首，显示音质和文件大小。
+          输入框旁的菜单会自动注册；各音源并行搜索，结果每页 5
+          首，显示音质和文件大小。切换到未完成的音源时显示搜索中，完成后自动更新。
           /status
           查看进度和管理任务。可发送“下一页”“上一页”“第2页”，下载只需“下载
           1”。Telegram
           仅允许白名单用户私聊；企业微信白名单留空时允许应用可见成员。
+          企业微信输入“音源 2”切换音源，发送“下载 1”下载。
         </p>
         <p>
           连接测试使用当前填写的凭据和代理，无需先保存，也不会发送消息。
@@ -240,6 +252,11 @@ export function BotSettings() {
             "Telegram 用户白名单",
             "数字用户 ID，多个用逗号分隔",
           )}
+          {field(
+            "tg_api_url",
+            "Telegram Bot API 地址",
+            "https://api.telegram.org",
+          )}
           <label>
             Telegram 代理
             <select
@@ -258,7 +275,10 @@ export function BotSettings() {
         <p>
           从 BotFather 获取 Token。白名单填写数字用户
           ID；使用长轮询接收命令，请移除该机器人的已有 webhook。
-          项目代理地址在“音源与设置”中配置和修改，选择后与音源共用。
+          项目代理地址在“音源与设置”中配置和修改，选择后与音源共用。 云端 API
+          附件上限为 50 MB；自建 Local Bot API（需以 --local 启动）为 2000
+          MB，在上方填写服务地址。发送原文件保留音质；FLAC
+          等格式能否在聊天内播放取决于客户端。
         </p>
         <button
           type="button"
@@ -321,6 +341,52 @@ export function BotSettings() {
         >
           测试企业微信连接
         </button>
+      </section>
+      <section className="settings-section settings-sources">
+        <h2>更多下载通知渠道</h2>
+        <p>
+          飞书、钉钉和 Discord 通过群 Webhook
+          通知新下载任务的完成、失败与取消，完成时附原文件下载链接。群 Webhook
+          仅提供结果通知，搜索和选曲请使用 Telegram、企业微信或 Web。
+        </p>
+        {(
+          [
+            ["discord", "Discord"],
+            ["feishu", "飞书 / Lark"],
+            ["dingtalk", "钉钉"],
+          ] as const
+        ).map(([channel, label]) => (
+          <details className="source-setting" key={channel}>
+            <summary>{label}</summary>
+            <div className="settings-grid">
+              <label className="ready-filter">
+                <input
+                  type="checkbox"
+                  checked={Boolean(config[`${channel}_enabled`])}
+                  onChange={(e) =>
+                    update(`${channel}_enabled`, e.target.checked)
+                  }
+                />
+                启用 {label} 下载通知
+              </label>
+              {secret(`${channel}_webhook`, `${label} Webhook`)}
+              {channel !== "discord" &&
+                secret(`${channel}_sign_secret`, "加签密钥（可选）")}
+            </div>
+            <p>
+              使用平台生成的 HTTPS
+              Webhook。飞书和钉钉可填写加签密钥；使用关键词校验时允许“musicdl”。群成员可访问通知中的下载链接，请按需设置链接有效期。
+            </p>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => void test(channel)}
+            >
+              检查 {label} 配置
+            </button>
+          </details>
+        ))}
       </section>
       <div className="settings-save">
         {error && (

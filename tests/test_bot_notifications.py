@@ -382,6 +382,9 @@ def test_commands_bind_results_and_tasks_to_user(setup_bot):
 
 def test_completion_delivery_retries_without_downloading_again(setup_bot, monkeypatch):
     _, bot, store, audio, track = setup_bot
+    # Oversized attachments still use renewable signed links.
+    with audio.open('r+b') as handle:
+        handle.truncate(51 * 1024 * 1024)
     job = completed_job(audio, track)
     store.put('download', job['id'], job)
     store.put('bot_task', job['id'], {'id': job['id'], 'owner': 'tg:123', 'channel': 'tg', 'user': '123', 'notified': None})
@@ -400,7 +403,7 @@ def test_completion_delivery_retries_without_downloading_again(setup_bot, monkey
         bot.enqueue.assert_not_called()
         item = store.values('bot_outbox')[0]
         assert item['url'] and item['job_id'] == job['id']
-        assert '文件大小：1000 B' in item['text']
+        assert '文件大小：51.0 MB' in item['text']
         assert job['id'] not in item['text']
         old_url = item['url']
         # Simulate a notification outage longer than the link's lifetime.
@@ -491,7 +494,7 @@ def test_telegram_pagination_callback_retains_message_id(setup_bot):
     asyncio.run(scenario())
 
 
-def test_both_channels_send_links_only_and_wecom_refreshes_expired_token(setup_bot):
+def test_link_fallbacks_and_wecom_refreshes_expired_token(setup_bot):
     _, bot, _, _, _ = setup_bot
     bot.telegram = Mock()
     item = {'channel': 'tg', 'user': '123', 'text': '完成', 'url': 'https://music.example.com/downloads/test'}
@@ -682,7 +685,7 @@ def test_http_and_ip_origin_save_and_signed_download(setup_bot, monkeypatch, add
     assert client.get(parsed.path + '?' + parsed.query).content == audio.read_bytes()
 
 
-@pytest.mark.parametrize('address', ['', 'ftp://music.example.com', 'http://',
+@pytest.mark.parametrize('address', ['ftp://music.example.com', 'http://',
     'http://user:password@music.example.com', 'http://music.example.com/path',
     'http://music.example.com?x=1', 'http://music.example.com#test',
     'http://192.168.1.20:bad', 'http://192.168.1.20:65536', 'http://bad host:8765'])

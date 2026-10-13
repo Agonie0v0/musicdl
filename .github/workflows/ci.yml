@@ -20,7 +20,7 @@ jobs:
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
       - run: python -m pytest tests/test_engine_compat.py tests/test_resumable_download.py -q
-      - run: python -m pytest tests/test_bot_notifications.py -q
+      - run: python -m pytest tests/test_bot_notifications.py tests/test_bot_files_sources.py -q
       - run: python -m pytest legacy/tests/test_app.py -q
       - run: python -m pytest tests/test_launcher.py tests/test_docker_entrypoint.py -q
   frontend:

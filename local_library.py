@@ -1,6 +1,7 @@
 """Read and edit local audio tags without replacing the audio content."""
 from functools import lru_cache
 import os
+import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -12,6 +13,17 @@ from mutagen.asf import ASF
 
 AUDIO_EXTENSIONS = {'.mp3', '.flac', '.m4a', '.mp4', '.ogg', '.opus', '.wav', '.aac', '.aiff', '.aif', '.wma', '.ape', '.wv'}
 MEDIA_TYPES = {'.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.m4a': 'audio/mp4', '.mp4': 'audio/mp4', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.wav': 'audio/wav', '.aac': 'audio/aac'}
+
+
+def download_stem(title, artist):
+    def clean(value, fallback):
+        value = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', '_', str(value or '')).strip(' .')
+        value = value.encode('utf-8')[:100].decode('utf-8', errors='ignore').rstrip(' .')
+        return value or fallback
+    stem = clean(title, '未知歌曲') + '-' + clean(artist, '未知歌手')
+    if re.fullmatch(r'CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]', stem.split('.')[0], re.I):
+        stem = '_' + stem
+    return stem
 
 
 def tag_keys(audio):

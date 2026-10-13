@@ -749,13 +749,29 @@ def install(old, root):
                         raise ValueError('下载器文件不在该任务目录中')
                     moved = {}
                     intended_dir.mkdir(parents=True, exist_ok=True)
+                    publish_stems = {}
+                    for index, audio_path in enumerate(completed, 1):
+                        stem = local_library.download_stem(job['track']['title'], job['track'].get('artist', ''))
+                        if len(completed) > 1:
+                            stem += f'-{index}'
+                        siblings = [p for p in audio_path.parent.iterdir() if p.is_file() and p.with_suffix('') == audio_path.with_suffix('')]
+                        parent = intended_dir / audio_path.relative_to(staging).parent
+                        candidate, collision = stem, 0
+                        while any((parent / (candidate + p.suffix)).exists() for p in siblings):
+                            collision += 1
+                            candidate = f'{stem}-{ident[:8]}' + (f'-{collision}' if collision > 1 else '')
+                        publish_stems[audio_path] = candidate
                     for file in staging.rglob('*'):
                         if not file.is_file() or file.is_symlink():
                             continue
                         resolved = file.resolve()
                         if resolved not in completed and not any(file.with_suffix('') == p.with_suffix('') for p in completed):
                             continue
-                        target = intended_dir / file.relative_to(staging)
+                        relative = file.relative_to(staging)
+                        audio_match = next((p for p in completed if file.with_suffix('') == p.with_suffix('')), None)
+                        if audio_match:
+                            relative = relative.with_name(publish_stems[audio_match] + file.suffix)
+                        target = intended_dir / relative
                         target.parent.mkdir(parents=True, exist_ok=True)
                         if target.exists():
                             target = target.with_name(f'{target.stem}-{ident[:8]}{target.suffix}')
@@ -1042,23 +1058,27 @@ def install(old, root):
                                 'source_results': source_results, 'config': config, 'registered': registered}
 
     async def bot_search(keyword, sources):
-        result = await search_start(SearchBody(keyword=keyword, sources=sources or None))
-        job = searches[result['id']]
-        partial = False
-        try:
-            await asyncio.wait_for(asyncio.shield(job['task']), timeout=90)
-        except asyncio.TimeoutError:
-            partial = True
-            old.pushlog('warning', '机器人搜索达到 90 秒等待上限，返回已解析结果；尚未完成的音源已停止', category='search')
-            await search_stop(result['id'])
-            await asyncio.gather(job['task'], return_exceptions=True)
-        except asyncio.CancelledError:
-            await search_stop(result['id'])
-            raise
-        events = list(job['events'])
-        tracks = list({value['id']: value for _, kind, value in events if kind == 'track'}.values())
-        partial |= any(kind == 'source' and value['status']['state'] == 'failed' for _, kind, value in events)
-        return tracks, partial
+        cfg = copy.deepcopy(old.manager.config)
+        tracks, partial = {}, False
+        async def run_source(source):
+            nonlocal partial
+            name = source_class(source)
+            if name not in cfg['music_sources'] or name not in registered:
+                raise HTTPException(400, '机器人音源未启用或无效')
+            def publish(song):
+                value = remember(song)
+                tracks[value['id']] = value
+            try:
+                songs = await asyncio.wait_for(source_results(cfg, name, keyword, publish), timeout=90)
+                for song in songs:
+                    publish(song)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                partial = True
+                old.pushlog('warning', f'机器人音源 {name} 搜索失败或超时：{type(error).__name__}', category='search')
+        await asyncio.gather(*(run_source(s) for s in sources or config()['sources']))
+        return list(tracks.values()), partial
 
     def bot_enqueue(value, ident):
         return enqueue_tracks([DownloadItem(track_id=value['id'], quality_id=value['qualities'][0]['id'])], [ident])[0]
@@ -1067,4 +1087,5 @@ def install(old, root):
     bot_notifications.install(old.app, get=get, put=put, values=values, remove=remove,
                               search=bot_search, enqueue=bot_enqueue, control=control_download,
                               resolve=resolve_library_file, log=old.pushlog,
-                              project_proxy=lambda: old.manager.config.get('proxy_url', ''))
+                              project_proxy=lambda: old.manager.config.get('proxy_url', ''),
+                              source_catalog=lambda: [s for s in catalog if s['engine_name'] in old.manager.config['music_sources']])

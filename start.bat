@@ -7,6 +7,8 @@ where python >nul 2>&1 || goto needpython
 python -m venv .venv || goto failed
 .venv\Scripts\python.exe -m pip install -r requirements.txt || goto failed
 :source
+.venv\Scripts\python.exe -c "import requests_toolbelt" >nul 2>&1
+if errorlevel 1 .venv\Scripts\python.exe -m pip install -r requirements.txt || goto failed
 if not exist frontend\dist\index.html (
   where npm >nul 2>&1 || goto neednode
   pushd frontend
