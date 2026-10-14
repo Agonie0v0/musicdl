@@ -76,6 +76,10 @@ def button_rows(buttons, columns=3):
     return [buttons[index:index + columns] for index in range(0, len(buttons), columns)]
 
 
+def search_page_size(channel):
+    return 8 if channel == 'tg' else 5
+
+
 def valid_size(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
@@ -381,24 +385,29 @@ class BotService:
         if 'source_states' in result:
             return self.source_page(message, search_id, result, page)
         tracks = result['tracks']
-        pages = (len(tracks) + 4) // 5
+        size = search_page_size(message['channel'])
+        pages = (len(tracks) + size - 1) // size
         if not 1 <= page <= pages:
             raise HTTPException(400, '搜索页码无效')
-        start = (page - 1) * 5
-        visible = tracks[start:start + 5]
-        lines = [f'搜索结果 · 第 {page}/{pages} 页 · 共 {len(tracks)} 首', '相关结果优先，同等匹配优先无损', '']
+        start = (page - 1) * size
+        visible = tracks[start:start + size]
+        lines = [f'搜索结果 · 第 {page}/{pages} 页 · 共 {len(tracks)} 首']
         for index, track in enumerate(visible, start + 1):
             source = SOURCE_LABELS.get(track['source'], track['source'].removesuffix('MusicClient'))
-            lines.extend([f'{index}. {concise(track["title"])}',
-                          f'{concise(track["artist"], 24)} · {concise(source, 16)}',
-                          f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}', ''])
-        lines.append('点击下方编号下载，试听请打开网页。' if message['channel'] == 'tg' else f'先打开网页试听确认版本。下载示例：下载 {start + 1}')
+            if message['channel'] == 'tg':
+                lines.append(f'{index}. {concise(track["title"], 48)} {concise(track["artist"], 24)}')
+            else:
+                lines.extend([f'{index}. {concise(track["title"])}',
+                              f'{concise(track["artist"], 24)} · {concise(source, 16)}',
+                              f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}', ''])
+        if message['channel'] == 'wecom':
+            lines.append(f'先打开网页试听确认版本。下载示例：下载 {start + 1}')
         if message['channel'] == 'wecom' and pages > 1:
             lines.append('翻页：下一页 / 上一页 / 第2页（30 分钟内有效）')
         if result.get('partial'):
             lines.append('部分音源失败或超时，以上为已返回结果。')
-        buttons = button_rows([{'text': f'下载 {index}', 'callback_data': f'/download {search_id} {index}'}
-                               for index in range(start + 1, start + len(visible) + 1)])
+        buttons = button_rows([{'text': str(index), 'callback_data': f'/download {search_id} {index}'}
+                               for index in range(start + 1, start + len(visible) + 1)], size)
         navigation = []
         if page > 1:
             navigation.append({'text': '上一页', 'callback_data': f'/results {search_id} {page - 1}'})
@@ -417,27 +426,30 @@ class BotService:
         selected = result['selected']
         source = result['source_states'][selected]
         tracks = source['tracks']
-        pages = max(1, (len(tracks) + 4) // 5)
+        size = search_page_size(message['channel'])
+        pages = max(1, (len(tracks) + size - 1) // size)
+        start = (page - 1) * size
+        visible = tracks[start:start + size]
         if not 1 <= page <= pages:
             raise HTTPException(400, '搜索页码无效')
         result['page'] = page
         if message.get('reply_message_id'):
             result['message_id'] = message['reply_message_id']
         self.put('bot_search', result['id'], result)
-        lines = [f'搜索源：{source["label"]} · {concise(result["keyword"], 60)}']
+        lines = [f'搜索源：{source["label"]} · 第 {page}/{pages} 页 · 共 {len(tracks)} 首']
         if source['state'] == 'searching':
             lines.append('搜索中… 可先切换其他音源，完成后自动更新。')
         elif not tracks:
             lines.append('搜索已停止、失败或超时，请重新搜索或检查音源设置。' if source['state'] == 'failed' else '没有可下载结果，请换关键词或切换音源。')
         else:
-            lines.extend([f'第 {page}/{pages} 页 · 共 {len(tracks)} 首', ''])
-            for index, track in enumerate(tracks[(page - 1) * 5:page * 5], (page - 1) * 5 + 1):
-                lines.extend([f'{index}. {concise(track["title"])} · {concise(track.get("artist"), 24)}',
-                              f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}'])
+            for index, track in enumerate(visible, start + 1):
+                lines.append(f'{index}. {concise(track["title"], 48)} {concise(track.get("artist"), 24)}')
+                if message['channel'] == 'wecom':
+                    lines.append(f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}')
             if source['state'] == 'failed':
                 lines.append('该音源部分结果已返回，其余失败或超时。')
         buttons = button_rows([{'text': str(i), 'callback_data': f'/download {search_id} {i} {selected}'}
-                               for i in range((page - 1) * 5 + 1, min(page * 5, len(tracks)) + 1)])
+                               for i in range(start + 1, start + len(visible) + 1)], size)
         navigation = []
         if page > 1:
             navigation.append({'text': '上一页', 'callback_data': f'/results {search_id} {page - 1} {selected}'})
@@ -446,7 +458,7 @@ class BotService:
         if navigation:
             buttons.append(navigation)
         buttons.extend(button_rows([{'text': ('✓ ' if i == selected else '') + concise(s['label'], 18),
-                                     'callback_data': f'/source {search_id} {i}'} for i, s in enumerate(result['source_states'])]))
+                                     'callback_data': f'/source {search_id} {i}'} for i, s in enumerate(result['source_states'])], 4))
         buttons.append([{'text': '我的任务', 'callback_data': '/status'}, {'text': '功能菜单', 'callback_data': '/menu'}])
         if message['channel'] == 'wecom':
             lines.append('\n切换音源：音源 序号，例如 音源 2。下载：下载 1。翻页：下一页 / 上一页。')
@@ -584,7 +596,8 @@ class BotService:
                 search_id = session['search_id']
                 page = session['page'] + (1 if command == 'next' else -1) if command in {'next', 'prev'} else int(args[0])
                 tracks = result['source_states'][result['selected']]['tracks'] if 'source_states' in result else result['tracks']
-                pages = max(1, (len(tracks) + 4) // 5)
+                size = search_page_size(message['channel'])
+                pages = max(1, (len(tracks) + size - 1) // size)
                 if not 1 <= page <= pages:
                     self.reply(message, '已经是最后一页。' if page > pages else '已经是第一页。')
                     return

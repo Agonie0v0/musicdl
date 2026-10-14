@@ -929,13 +929,27 @@ try {
     .getByLabel("每页大小", { exact: true })
     .evaluate((el) => el.getBoundingClientRect().width);
   assert.ok(numberWidth <= 120, "numeric settings remain compact");
-  const playerBackground = await page
-    .locator(".player")
-    .evaluate((el) => getComputedStyle(el).backgroundColor);
-  assert.ok(
-    playerBackground.includes("0.76"),
-    "player background is translucent",
-  );
+  for (const theme of ["light", "dark"]) {
+    await page.getByLabel("界面主题").selectOption(theme);
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const material = await page.locator(".player").evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          background: style.backgroundColor,
+          blur: style.backdropFilter,
+          opacity: style.opacity,
+        };
+      });
+      assert.ok(
+        material.background.includes(theme === "light" ? "0.42" : "0.48"),
+        "player reveals the page in both themes and layouts",
+      );
+      assert.equal(material.blur, "none", "page content is not blurred away");
+      assert.equal(material.opacity, "1", "player controls keep full contrast");
+    }
+  }
+  await page.getByLabel("界面主题").selectOption("light");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => scrollTo(0, 0));
   for (const width of [768, 1200, 1440, 1920, 2560]) {

@@ -8,6 +8,7 @@
   --soft: #ede7f8;
   --bg: #f7f6fb;
   --surface: #ffffff;
+  --player-surface: rgb(255 255 255 / 42%);
   --sidebar: #efedf6;
   --hover: #f0edf7;
   --amber: #885c20;
@@ -233,6 +234,7 @@
   --soft: #372b4c;
   --bg: #1c1826;
   --surface: #262030;
+  --player-surface: rgb(38 32 48 / 48%);
   --sidebar: #211b2c;
   --hover: #332b41;
   --amber: #e3bd7d;
@@ -1444,8 +1446,7 @@ tr.current {
   grid-template-columns: minmax(0, 250px) minmax(0, 1fr) minmax(0, 250px);
   align-items: center;
   gap: 30px;
-  background: color-mix(in srgb, var(--surface) 76%, transparent);
-  backdrop-filter: blur(14px);
+  background: var(--player-surface);
   border: 1px solid var(--line);
   border-radius: 14px;
   box-shadow: 0 6px 24px rgb(0 0 0 / 6%);

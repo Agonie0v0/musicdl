@@ -20,20 +20,28 @@ def test_independent_sources_switch_while_pending_and_bind_old_buttons(setup_bot
     _, bot, store, _, track = setup_bot
     async def scenario():
         fast, slow = asyncio.Event(), asyncio.Event()
-        bot.source_catalog = lambda: [{'id': 'netease', 'label': '网易云'}, {'id': 'qq', 'label': 'QQ音乐'}]
+        bot.source_catalog = lambda: [{'id': 'netease', 'label': '网易云'}, {'id': 'qq', 'label': 'QQ音乐'},
+                                      {'id': 'kuwo', 'label': '酷我'}, {'id': 'kugou', 'label': '酷狗'}]
         async def search(keyword, sources):
             await (fast if sources == ['netease'] else slow).wait()
-            return [{**track, 'id': sources[0] + str(i), 'source': sources[0]} for i in range(8)], False
+            return [{**track, 'id': sources[0] + str(i), 'title': f'歌曲{i}', 'source': sources[0]} for i in range(10)], False
         bot.search = search
         message = {'id': 'a' * 64, 'channel': 'tg', 'user': '123', 'text': '/search 测试'}
         await bot.command(message)
         item = store.values('bot_outbox')[-1]
         assert '搜索中' in item['text']
         assert [b['text'] for row in item['buttons'] for b in row][:2] == ['✓ 网易云', 'QQ音乐']
+        assert len(item['buttons'][0]) == 4
         fast.set()
         for _ in range(10):
             await asyncio.sleep(0)
-        assert '共 8 首' in store.values('bot_outbox')[-1]['text']
+        first = store.values('bot_outbox')[-1]
+        assert '共 10 首' in first['text']
+        assert len(first['text'].splitlines()) == 9
+        assert '8. 歌曲7' in first['text'] and '9. 歌曲8' not in first['text']
+        assert [b['text'] for b in first['buttons'][0]] == [str(i) for i in range(1, 9)]
+        assert first['buttons'][1][0]['text'] == '下一页'
+        assert len(first['buttons'][2]) == 4
         assert not slow.is_set()
         old_button = store.values('bot_outbox')[-1]['buttons'][0][0]['callback_data']
         bot.telegram = Mock(return_value={'message_id': 42})
@@ -49,10 +57,15 @@ def test_independent_sources_switch_while_pending_and_bind_old_buttons(setup_bot
             await bot.command({**message, 'user': '456', 'text': '/source aaaaaaaa 0'})
         slow.set()
         await bot.search_tasks['tg:123']
-        assert '共 8 首' in store.values('bot_outbox')[-1]['text']
+        assert '共 10 首' in store.values('bot_outbox')[-1]['text']
         await bot.command({**message, 'text': '/results aaaaaaaa 2 0', 'reply_message_id': 42})
         assert '第 2/2 页' in store.values('bot_outbox')[-1]['text']
         assert '网易云' in store.values('bot_outbox')[-1]['text']
+        assert store.values('bot_outbox')[-1]['buttons'][0][0]['callback_data'] == '/download aaaaaaaa 9 0'
+        await bot.command({**message, 'text': '下一页'})
+        assert '最后一页' in store.values('bot_outbox')[-1]['text']
+        await bot.command({**message, 'text': '上一页'})
+        assert '第 1/2 页' in store.values('bot_outbox')[-1]['text']
     asyncio.run(scenario())
 
 

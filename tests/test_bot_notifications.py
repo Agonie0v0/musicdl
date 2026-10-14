@@ -104,16 +104,16 @@ def test_search_cards_pagination_and_download_indices(setup_bot):
         bot.search.assert_awaited_once_with('稻香 周杰伦', bot.sources)
         first = store.values('bot_outbox')[-1]
         assert '第 1/2 页' in first['text'] and '共 10 首' in first['text']
-        assert '1.0 MB' in first['text'] and '5.0 MB' in first['text']
-        assert '6.0 MB' not in first['text'] and '部分音源' in first['text']
+        assert '8. 歌曲7' in first['text'] and '9. 歌曲8' not in first['text']
+        assert '部分音源' in first['text']
         assert '歌曲0 长标题' in first['text'] and '…' in first['text']
-        assert [len(row) for row in first['buttons'][:2]] == [3, 2]
+        assert [b['text'] for b in first['buttons'][0]] == [str(i) for i in range(1, 9)]
         assert all(len(b['callback_data'].encode()) <= 64 for row in first['buttons'] for b in row if 'callback_data' in b)
         await bot.command({**message, 'text': '/results aaaaaaaa 2', 'reply_message_id': 42})
         second = store.values('bot_outbox')[-1]
-        assert '第 2/2 页' in second['text'] and '6.0 MB' in second['text']
+        assert '第 2/2 页' in second['text'] and '9. 歌曲8' in second['text']
         assert second['edit_message_id'] == 42
-        assert second['buttons'][0][0]['callback_data'] == '/download aaaaaaaa 6'
+        assert second['buttons'][0][0]['callback_data'] == '/download aaaaaaaa 9'
         bot.telegram = Mock()
         bot.send(second)
         assert bot.telegram.call_args.args[0] == 'editMessageText'
