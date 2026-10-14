@@ -43,7 +43,7 @@ Docker 在 Compose 中配置登录账号和密码；源码运行可复制 [.env.
 
 公网地址支持 HTTP / HTTPS 域名或 IP，可带端口，如 `http://192.168.1.20:8765`、`https://music.example.com`；省略协议时自动补 `http://`，不含路径或查询参数。填写手机可访问的地址；企业微信回调还需平台可访问。下载链接默认有效 24 小时，可设为 60–604800 秒。
 
-连接测试使用当前填写的渠道凭据和代理，无需先保存，也不要求先启用或填写公网地址、白名单。测试不保存配置、不发送消息；保存后配置才会生效。
+连接测试使用当前填写的渠道凭据和代理，无需先保存，也不要求先启用或填写公网地址、白名单。测试不保存配置、不发送消息；保存后配置才会生效。内置 Telegram Local Bot API 的首次测试是例外：如果内置服务尚未按当前 API ID/API Hash 运行，测试只检查程序存在和凭据格式，并提示保存后启动服务；服务按这组凭据运行后再次测试才会实际调用 Telegram。完整搭建步骤见 [README 的 Telegram Local Bot API Server 指南](../README.md#telegram-local-bot-api-server)。
 
 ### Telegram
 
@@ -79,7 +79,7 @@ Telegram 也可点击消息按钮操作。搜索先显示全部已启用音源�
 
 机器人与网页共用下载队列。Telegram 的 MP3 / M4A / FLAC 优先使用 `sendAudio`；FLAC 上传时保留原文件名和字节，并标记 `audio/flac`，客户端支持时可在聊天内播放。音频格式被明确拒绝后才改用 `sendDocument`，不转码。文件采用流式上传，不把整个附件读入内存，上传期间不阻塞搜索卡片更新。Telegram 文件均先尝试上传，超过 50 MB 也不提前拦截；接口明确拒绝文件大小后回退到签名下载链接，并在日志和通知中显示实际错误。已拒绝上传的文件在链接通知重试时不会重复上传。企业微信仍使用临时素材发送文件，超过 20 MB 时提供链接。网络错误保留通知重试，不重新下载曲目；`/file 任务编号` 可重新尝试发送文件，`/link 任务编号` 可获取链接。
 
-Telegram 文档标注云端上传上限为 50 MB，官方 [Local Bot API Server](https://core.telegram.org/bots/api#using-a-local-bot-api-server) 的 `--local` 模式为 2000 MB。通知设置中可以直接开启“使用内置 Telegram 本地服务（大文件上传）”，填写从 [my.telegram.org](https://my.telegram.org/apps) 获取的 API ID 和 API Hash；Docker 镜像会内置官方程序并自动管理本机 8081 端口。也可以关闭内置模式，填写自建 API 地址（例如 `http://telegram-bot-api:8081`，或环境变量 `MUSICDL_TG_API_URL`）。本项目不会按这两个数值提前拒绝文件，以实际接口响应为准。切换服务器前本项目会按官方要求调用旧服务的 `logOut`；本地服务只监听回环地址，不需要与 musicdl 共享音乐目录。仅使用 Telegram 文件交付时访问地址可留空，大小被拒绝后的下载链接需要配置访问地址。实测时可在“运行日志 → 通知与机器人”查看易懂的失败原因，展开“查看原始信息”可保留平台错误。
+Telegram 文档标注云端上传上限为 50 MB，官方 [Local Bot API Server](https://core.telegram.org/bots/api#using-a-local-bot-api-server) 的 `--local` 模式为 2000 MB。通知设置中可以直接开启“使用内置 Telegram 本地服务（大文件上传）”，填写从 [my.telegram.org](https://my.telegram.org/apps) 获取的 API ID 和 API Hash；Docker 镜像会内置官方程序并自动管理本机 8081 端口。也可以关闭内置模式，填写自建 API 地址（例如 `http://telegram-bot-api:8081`，或环境变量 `MUSICDL_TG_API_URL`）。本项目不会按这两个数值提前拒绝文件，以实际接口响应为准。切换服务器时只会在旧、新 Telegram 配置都启用且由当前配置管理时调用旧服务的 `logOut`；其他程序占用 Token 或环境变量首次部署时，请按 [README 的完整指南](../README.md#telegram-local-bot-api-server) 和[官方迁移说明](https://core.telegram.org/bots/api#moving-a-bot-to-a-local-server)处理。本地服务只监听回环地址，不需要与 musicdl 共享音乐目录。仅使用 Telegram 文件交付时访问地址可留空，大小被拒绝后的下载链接需要配置访问地址。实测时可在“运行日志 → 通知与机器人”查看易懂的失败原因，展开“查看原始信息”可保留平台错误。
 
 ### 飞书、钉钉、Discord 下载通知
 
