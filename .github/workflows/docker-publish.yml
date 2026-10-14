@@ -10,9 +10,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  push_to_registry:
-    name: 构建并发布多架构镜像
-    runs-on: ubuntu-latest
+  build:
+    name: 构建 ${{ matrix.arch }} 镜像
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -21,9 +31,6 @@ jobs:
     steps:
       - name: 检出仓库
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: 设置 QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -35,28 +42,50 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 生成镜像标签
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/agonie0v0/musicdl
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=long
-            type=ref,event=branch
-
-      - name: 构建并推送镜像
+      - name: 构建并推送平台镜像
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          tags: ghcr.io/agonie0v0/musicdl:sha-${{ github.sha }}-${{ matrix.arch }}
+          build-args: TELEGRAM_BUILD_JOBS=4
+          cache-from: type=gha,scope=musicdl-${{ matrix.arch }}
+          cache-to: type=gha,scope=musicdl-${{ matrix.arch }},mode=max
           provenance: mode=max
           sbom: true
+
+  publish:
+    name: 合并并发布多架构 manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: 登录 GitHub Container Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 合并多架构 manifest
+        run: |
+          set -eu
+          image=ghcr.io/agonie0v0/musicdl
+          source_amd64="$image:sha-${GITHUB_SHA}-amd64"
+          source_arm64="$image:sha-${GITHUB_SHA}-arm64"
+          docker buildx imagetools create \
+            -t "$image:sha-${GITHUB_SHA}" \
+            -t "$image:latest" \
+            -t "$image:${GITHUB_REF_NAME}" \
+            "$source_amd64" "$source_arm64"
 
       - name: 验证已发布镜像可启动
         run: |

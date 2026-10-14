@@ -7,6 +7,7 @@ RUN npm run build
 
 FROM debian:bookworm-slim AS telegram-api
 ARG TELEGRAM_BOT_API_REF=e3e9dd8e5b3d7ab8537cd5a10dc31d5ffa8f82d1
+ARG TELEGRAM_BUILD_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates cmake g++ make gperf libssl-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
@@ -14,7 +15,7 @@ RUN git init . && git remote add origin https://github.com/tdlib/telegram-bot-ap
     && git fetch --depth 1 origin "$TELEGRAM_BOT_API_REF" && git checkout --detach FETCH_HEAD \
     && git submodule update --init --recursive --depth 1 \
     && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/telegram \
-    && cmake --build build --target install --parallel 2 \
+    && cmake --build build --target install --parallel "$TELEGRAM_BUILD_JOBS" \
     && strip /opt/telegram/bin/telegram-bot-api
 
 FROM python:3.14-slim-bookworm
