@@ -715,6 +715,44 @@ def test_qq_empty_search_retries_signed_native_endpoint_without_losing_song(empt
     assert not provider.use_encrypted_endpoint and overrides['params'] == {'custom': 'keep'}
 
 
+@pytest.mark.parametrize('parser', ['_parsewithvkeysapi', '_parsewithxcvtsapi'])
+@pytest.mark.parametrize('available', [True, False])
+def test_qq_missing_master_quality_continues_to_lossless_without_unbound_song(monkeypatch, parser, available):
+    from unittest.mock import Mock
+    from types import SimpleNamespace
+    import requests
+    provider = native_quality_provider('QQMusicClient')
+    audio = {'ok': True, 'ext': 'flac', 'file_size_bytes': 153406668,
+             'file_size': '146.3 MB', 'download_url': 'https://example.org/master.flac'}
+    provider.audio_link_tester = SimpleNamespace(test=Mock(return_value=audio))
+    metadata = {'mid': 'song-mid', 'title': '稻香', 'singer': [{'name': '周杰伦'}],
+                'album': {'title': '魔杰座', 'mid': 'album-mid'}, 'interval': 223}
+    calls = []
+    def response(url, **kwargs):
+        from urllib.parse import urlsplit, parse_qs
+        quality = parse_qs(urlsplit(url).query).get('quality') or parse_qs(urlsplit(url).query).get('type')
+        if quality:
+            calls.append(quality[0])
+        value = requests.Response()
+        value.status_code = 200
+        data = {'code': 110001, 'msg': '账号被风控无法获取', 'data': {}}
+        if available and len(calls) == 3:
+            data['data'].update(url=audio['download_url'], music=audio['download_url'],
+                                title='稻香', singer='周杰伦', album_name='魔杰座', lyric='[03:43.00]歌词')
+        value._content = json.dumps(data).encode()
+        return value
+    monkeypatch.setattr(requests, 'get', response)
+    log_id = app.original.LOG_SEQUENCE
+    result = getattr(provider, parser)(metadata, {'timeout': 17, 'headers': {'X-Custom': 'preserve'}})
+    assert result.with_valid_download_url is available
+    assert len(calls) == (3 if available else (6 if parser == '_parsewithvkeysapi' else 4))
+    assert any(entry['id'] > log_id and '状态码 110001，账号被风控无法获取' in entry['message']
+               for entry in app.original.LOGS)
+    if available:
+        assert result.ext == 'flac' and result.file_size_bytes == audio['file_size_bytes']
+        assert result.song_name == '稻香' and result.singers == '周杰伦'
+
+
 def test_native_empty_search_error_is_reported_as_failure(monkeypatch, tmp_path):
     def fail(*args):
         app.original.pushlog('error', 'QQMusicClient._search >>> 稻香 on page 1 (Error: rejected)')

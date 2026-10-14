@@ -15,6 +15,7 @@ import os
 import re
 import json
 import time
+from datetime import datetime, timezone
 import uuid
 import copy
 import hashlib
@@ -202,7 +203,7 @@ def pushlog(level: str, message: str, category='system', task_id=None, timestamp
     global LOG_SEQUENCE
     with LOG_LOCK:
         LOG_SEQUENCE += 1
-        entry = {'id': LOG_SEQUENCE, 'time': timestamp or time.strftime('%Y-%m-%d %H:%M:%S'),
+        entry = {'id': LOG_SEQUENCE, 'time': timestamp or datetime.now(timezone.utc).isoformat(timespec='seconds'),
                  'level': level, 'category': category, 'task_id': task_id, 'message': redactlog(message)}
         LOGS.append(entry)
         return entry

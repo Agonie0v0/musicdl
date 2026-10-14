@@ -85,14 +85,42 @@ def qq_search_results(provider, response, search_meta, request_overrides, page_n
     return songs
 
 
-def compile_native(native, *, dispatcher=False, qq_search_log=None):
+def qq_quality_missing(provider, response_data, quality, *, parser, log):
+    data = response_data if isinstance(response_data, dict) else {}
+    reason = data.get('message') or data.get('msg') or '未返回音频地址'
+    log('warning', f'{provider.source} 解析接口 {parser} 音质 {quality} 不可用：'
+                  f'状态码 {data.get("code", "未知")}，{str(reason)[:200]}', category='search')
+
+
+def recover_qq_quality_loop(tree):
+    function = tree.body[0]
+    function.body.insert(0, ast.parse('song_info = SongInfo(source=self.source)').body[0])
+    loop = next(node for node in function.body if isinstance(node, ast.For)
+                and isinstance(node.target, ast.Name) and node.target.id == 'music_quality')
+    function.body.insert(function.body.index(loop) + 1, ast.parse('''
+if not song_info.with_valid_download_url:
+    return song_info
+''').body[0])
+    for node in ast.walk(function):
+        if (isinstance(node, ast.If) and len(node.body) == 1 and isinstance(node.body[0], ast.Break)
+                and any(isinstance(part, ast.NamedExpr) and isinstance(part.target, ast.Name)
+                        and part.target.id == 'download_url' for part in ast.walk(node.test))):
+            # Missing master audio must not hide the following lossless qualities.
+            node.body = ast.parse('_musicdl_qq_quality_missing(self, download_result, music_quality)\ncontinue').body
+
+
+def compile_native(native, *, dispatcher=False, qq_search_log=None, qq_quality_log=None):
     native = inspect.unwrap(native)
     lines, start = inspect.getsourcelines(native)
     tree = ast.parse(textwrap.dedent(''.join(lines)))
     tree = RequestKeywords().visit(tree)
+    if qq_quality_log is not None:
+        recover_qq_quality_loop(tree)
     if dispatcher:
         prefer_lossless(tree)
     namespace = dict(native.__globals__, _musicdl_audio_rank=audio_rank)
+    if qq_quality_log is not None:
+        namespace['_musicdl_qq_quality_missing'] = functools.partial(qq_quality_missing, parser=native.__name__, log=qq_quality_log)
     if qq_search_log is not None:
         loop = next(n for n in ast.walk(tree) if isinstance(n, ast.For)
                     and isinstance(n.iter, ast.Call) and isinstance(n.iter.func, ast.Name)
@@ -147,7 +175,8 @@ def install(log):
             for name in vars(cls):
                 if not (name.startswith('_parsewith') and name.endswith('api')):
                     continue
-                methods[name] = observe(compile_native(getattr(cls, name)), cls.source, name, log)
+                quality_log = log if cls is qq.QQMusicClient and name in {'_parsewithvkeysapi', '_parsewithxcvtsapi'} else None
+                methods[name] = observe(compile_native(getattr(cls, name), qq_quality_log=quality_log), cls.source, name, log)
             methods['_parsewiththirdpartapis'] = compile_native(cls._parsewiththirdpartapis, dispatcher=True)
             if cls is qq.QQMusicClient:
                 methods['_search'] = compile_native(cls._search, qq_search_log=log)

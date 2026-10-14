@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Pause, Play, Search, ArrowDown } from "lucide-react";
 import { api } from "./api";
+import { logTime } from "./log-time";
 
 type LogEntry = {
   id: number;
@@ -76,7 +77,7 @@ export function RuntimeLogs({ active }: { active: boolean }) {
           : entry.level === level)) &&
       (category === "all" || (entry.category || "system") === category) &&
       (!needle ||
-        `${entry.message} ${entry.task_id || ""} ${entry.time} ${categories[entry.category || "system"] || ""}`
+        `${entry.message} ${entry.task_id || ""} ${logTime(entry.time)} ${categories[entry.category || "system"] || ""}`
           .toLowerCase()
           .includes(needle)),
   );
@@ -89,7 +90,7 @@ export function RuntimeLogs({ active }: { active: boolean }) {
     const text = filtered
       .map(
         (entry) =>
-          `[${entry.time}] [${entry.level.toUpperCase()}] [${categories[entry.category || "system"] || entry.category}]${entry.task_id ? ` [${entry.task_id}]` : ""} ${entry.message}`,
+          `[${logTime(entry.time)}] [${entry.level.toUpperCase()}] [${categories[entry.category || "system"] || entry.category}]${entry.task_id ? ` [${entry.task_id}]` : ""} ${entry.message}`,
       )
       .join("\n");
     const url = URL.createObjectURL(
@@ -206,7 +207,7 @@ export function RuntimeLogs({ active }: { active: boolean }) {
       >
         {filtered.map((entry) => (
           <li className="log-row" key={entry.id} data-level={entry.level}>
-            <time>{entry.time}</time>
+            <time dateTime={entry.time}>{logTime(entry.time)}</time>
             <span className="log-level">
               {levels[entry.level] || entry.level}
             </span>

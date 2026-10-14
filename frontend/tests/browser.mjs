@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 const base = "http://127.0.0.1:18766";
 const server = spawn(
   process.execPath,
@@ -29,6 +29,7 @@ try {
   });
   const page = await browser.newPage({
       viewport: { width: 1440, height: 1000 },
+      timezoneId: "Asia/Shanghai",
     }),
     errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -146,7 +147,7 @@ try {
   const logEntries = [
     {
       id: 1,
-      time: "2026-10-10 14:00:00",
+      time: "2026-10-10T06:00:00+00:00",
       level: "info",
       category: "search",
       task_id: "search-fixture",
@@ -154,7 +155,7 @@ try {
     },
     {
       id: 2,
-      time: "2026-10-10 14:00:01",
+      time: "2026-10-10T06:00:01+00:00",
       level: "error",
       category: "download",
       task_id: "download-fixture",
@@ -1025,6 +1026,9 @@ try {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole("button", { name: "运行日志", exact: true }).click();
   await expect(page.getByRole("log")).toContainText("HTTP 403");
+  await expect(page.locator(".log-row time").first()).toHaveText(
+    "2026-10-10 14:00:00",
+  );
   await page.getByLabel("日志级别").selectOption("error");
   assert.equal(await page.locator(".log-row").count(), 1);
   await page.getByLabel("日志类别").selectOption("search");
@@ -1034,7 +1038,13 @@ try {
   assert.equal(await page.locator(".log-row").count(), 1);
   const exported = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出当前日志", exact: true }).click();
-  assert.ok((await exported).suggestedFilename().endsWith(".log"));
+  const download = await exported;
+  assert.ok(download.suggestedFilename().endsWith(".log"));
+  assert.ok(
+    (await readFile(await download.path(), "utf8")).includes(
+      "[2026-10-10 14:00:01]",
+    ),
+  );
   await page.getByRole("button", { name: "暂停更新", exact: true }).click();
   const frozen = logFetches;
   await page.waitForTimeout(1100);

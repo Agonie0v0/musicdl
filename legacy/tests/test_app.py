@@ -285,6 +285,17 @@ def test_runtime_logs_redact_secrets_and_retain_diagnostic_context(monkeypatch):
     assert entry['id'] > 0 and entry['category'] == 'download' and entry['task_id'] == 'fixture-task'
 
 
+def test_runtime_logs_have_timezone_and_preserve_worker_event_time():
+    from datetime import datetime, timezone
+    entry = app.pushlog('info', 'timezone test')
+    actual = datetime.fromisoformat(entry['time'])
+    assert actual.utcoffset().total_seconds() == 0
+    assert abs((datetime.now(timezone.utc) - actual).total_seconds()) < 3
+    original_time = '2026-10-14T03:01:50+00:00'
+    forwarded = app.pushlog('info', 'worker event', timestamp=original_time)
+    assert forwarded['time'] == original_time
+
+
 def test_workdir_cannot_escape_fixed_root(monkeypatch, tmp_path):
     root = (tmp_path / 'music').resolve()
     root.mkdir()
