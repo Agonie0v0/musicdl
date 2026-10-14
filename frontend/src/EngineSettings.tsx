@@ -11,6 +11,7 @@ interface EngineConfig {
   proxy_scope: string;
   proxy_sources: string[];
   request_timeout: number;
+  lazy_search: boolean;
   default_threads: number;
   download_layout: string;
   lyrics_mode: string;
@@ -459,6 +460,22 @@ export function EngineSettings({
       <section className="settings-section settings-behavior">
         <h2>引擎行为</h2>
         <div className="engine-switches">
+          <label className="check-label">
+            <input
+              type="checkbox"
+              aria-describedby="lazy-search-description"
+              checked={Boolean(config.lazy_search)}
+              onChange={(e) =>
+                setConfig({ ...config, lazy_search: e.target.checked })
+              }
+            />
+            <span>
+              按需解析音源（QQ / 网易云）
+              <small id="lazy-search-description">
+                开启后先显示歌曲，播放或下载时再解析，格式和大小可能暂不可见。关闭时搜索即解析并显示可用信息。保存后对新搜索生效。
+              </small>
+            </span>
+          </label>
           {switches.map(([key, label, description]) => (
             <label className="check-label" key={key}>
               <input

@@ -497,6 +497,7 @@ def test_full_settings_save_preserves_all_original_fields_and_timeout_zero():
     try:
         cfg = client.get('/api/engine/config').json()
         cfg['request_timeout'] = 0
+        cfg['lazy_search'] = True
         cfg['default_threads'] = 12
         cfg['proxy_scope'] = 'selected'
         cfg['proxy_sources'] = ['GDStudioMusicClient']
@@ -512,9 +513,13 @@ def test_full_settings_save_preserves_all_original_fields_and_timeout_zero():
         restored = client.get('/api/engine/config').json()
         for key in cfg:
             assert restored[key] == cfg[key], key
+        assert app.original.loadconfig()['lazy_search'] is True
+        cfg['lazy_search'] = False
         cfg['request_timeout'] = 300
         assert client.put('/api/engine/config', json=cfg, headers=HEADERS).status_code == 200
         assert client.get('/api/engine/config').json()['request_timeout'] == 300
+        assert client.get('/api/engine/config').json()['lazy_search'] is False
+        assert app.original.loadconfig()['lazy_search'] is False
         compact = client.get('/api/config').json()
         assert client.put('/api/config', json=compact, headers=HEADERS).status_code == 200
     finally:
@@ -703,15 +708,19 @@ def endpoint(path, method):
 
 
 @pytest.mark.parametrize('lazy', [None, '0', '1'])
-def test_search_displays_resolved_metadata_unless_lazy_is_enabled(monkeypatch, lazy):
+@pytest.mark.parametrize('saved', [None, False, True])
+def test_search_displays_resolved_metadata_unless_lazy_is_enabled(monkeypatch, lazy, saved):
     from types import SimpleNamespace
     if lazy is None:
         monkeypatch.delenv('MUSICDL_LAZY_SEARCH', raising=False)
     else:
         monkeypatch.setenv('MUSICDL_LAZY_SEARCH', lazy)
+    monkeypatch.setitem(app.original.manager.config, 'lazy_search', saved)
+    enabled = saved if saved is not None else lazy == '1'
+    assert endpoint('/api/engine/config', 'GET')()['lazy_search'] is enabled
 
     async def search(cfg, source, keyword, publish, refresh):
-        assert cfg['_musicdl_candidates'] is (lazy == '1')
+        assert cfg['_musicdl_candidates'] is enabled
         song = fixture_song()
         song.source = source
         if cfg['_musicdl_candidates']:
@@ -731,7 +740,7 @@ def test_search_displays_resolved_metadata_unless_lazy_is_enabled(monkeypatch, l
                 events = [event async for event in response.body_iterator]
             tracks = [json.loads(event.split('data: ', 1)[1]) for event in events if 'event: track\n' in event]
             assert len(tracks) == 1
-            if lazy != '1':
+            if not enabled:
                 assert tracks[0]['qualities'][0]['codec'] == 'wav'
                 assert tracks[0]['size_bytes'] == len(fixture_song().downloaded_contents)
                 assert tracks[0]['playback']['state'] == 'ready'

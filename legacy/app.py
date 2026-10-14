@@ -670,6 +670,7 @@ class TaskIdsBody(BaseModel):
 class ConfigBody(BaseModel):
     music_sources: list[str]
     global_client_cfg: dict
+    lazy_search: bool | None = None
     proxy_url: str = ''
     proxy_scope: str = 'all'
     proxy_sources: list[str] = []

@@ -130,6 +130,7 @@ try {
     proxy_scope: "all",
     proxy_sources: [],
     request_timeout: 15,
+    lazy_search: false,
     default_threads: 10,
     download_layout: "artist_album",
     lyrics_mode: "both",
@@ -897,6 +898,11 @@ try {
   await page
     .getByLabel("分源搜索规则（search_rules）", { exact: false })
     .fill('{"MiguMusicClient":{"quality":"keep"}}');
+  const lazySearch = page.getByRole("checkbox", {
+    name: /按需解析音源（QQ \/ 网易云）/,
+  });
+  await expect(lazySearch).not.toBeChecked();
+  await lazySearch.check();
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(
     page.locator(".settings-save").getByRole("status"),
@@ -909,6 +915,8 @@ try {
   });
   assert.equal(engineConfig.default_threads, 12);
   assert.equal(engineConfig.request_timeout, 0);
+  assert.equal(engineConfig.lazy_search, true);
+  await expect(lazySearch).toBeChecked();
   assert.deepEqual(engineConfig.proxy_sources, [
     "GDStudioMusicClient",
     "NeteaseMusicClient",
@@ -936,10 +944,13 @@ try {
     page.locator(".settings-save").getByRole("status"),
   ).toContainText("GDStudio：需要补全分源配置");
   engineSourceErrors = {};
+  await lazySearch.uncheck();
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(
     page.locator(".settings-save").getByRole("status"),
   ).toContainText("全部设置已保存并生效");
+  assert.equal(engineConfig.lazy_search, false);
+  await expect(lazySearch).not.toBeChecked();
   await page.locator(".settings-advanced > summary").click();
   await sourceDisclosure
     .getByRole("button", { name: "完成选择，收起" })

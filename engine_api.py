@@ -379,14 +379,17 @@ def install(old, root):
 
     @router.get('/api/engine/config')
     def read_engine_config():
-        return copy.deepcopy(old.manager.config)
+        cfg = copy.deepcopy(old.manager.config)
+        if cfg.get('lazy_search') is None:
+            cfg['lazy_search'] = os.environ.get('MUSICDL_LAZY_SEARCH', '0') == '1'
+        return cfg
 
     @router.put('/api/engine/config')
     def write_engine_config(body: dict):
         try:
             # Keep the complete original configuration API and every provider's
             # init parameters, request overrides, threading and parser rules.
-            old.putconfig(old.ConfigBody(**body))
+            old.putconfig(old.ConfigBody(**{'lazy_search': old.manager.config.get('lazy_search'), **body}))
         except (ValueError, AssertionError) as error:
             raise HTTPException(400, str(error))
         return {'saved': True, 'source_errors': old.manager.source_errors}
@@ -545,8 +548,8 @@ def install(old, root):
     @router.post('/api/search/jobs')
     async def search_start(body: SearchBody):
         keyword = body.keyword.strip()
-        cfg = copy.deepcopy(old.manager.config)
-        cfg['_musicdl_candidates'] = os.environ.get('MUSICDL_LAZY_SEARCH', '0') == '1'
+        cfg = read_engine_config()
+        cfg['_musicdl_candidates'] = cfg['lazy_search']
         cfg['_musicdl_refresh'] = body.refresh
         sources = [source_class(s) for s in (body.sources or config()['sources'])]
         if not keyword or not sources or any(s not in cfg['music_sources'] or s not in registered for s in sources):
