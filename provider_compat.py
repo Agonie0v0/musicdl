@@ -88,8 +88,13 @@ def qq_search_results(provider, response, search_meta, request_overrides, page_n
 def qq_quality_missing(provider, response_data, quality, *, parser, log):
     data = response_data if isinstance(response_data, dict) else {}
     reason = data.get('message') or data.get('msg') or '未返回音频地址'
-    log('warning', f'{provider.source} 解析接口 {parser} 音质 {quality} 不可用：'
-                  f'状态码 {data.get("code", "未知")}，{str(reason)[:200]}', category='search')
+    if parser == '_parsewithvkeysapi':
+        label = {14: '臻品母带 2.0', 13: '臻品空间音频', 12: '杜比全景声',
+                 11: 'Hi-Res', 10: 'SQ 无损', 9: 'HQ 增强'}.get(quality, str(quality))
+        quality = f'{label}（{quality}）'
+    log('warning', f'{provider.source} 第三方解析接口 {parser} 音质 {quality} 不可用：'
+                  f'接口错误码 {data.get("code", "未知")}，{str(reason)[:200]}；'
+                  '继续尝试其他音质或解析接口。', category='search')
 
 
 def recover_qq_quality_loop(tree):

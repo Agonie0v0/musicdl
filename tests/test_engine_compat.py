@@ -746,8 +746,10 @@ def test_qq_missing_master_quality_continues_to_lossless_without_unbound_song(mo
     result = getattr(provider, parser)(metadata, {'timeout': 17, 'headers': {'X-Custom': 'preserve'}})
     assert result.with_valid_download_url is available
     assert len(calls) == (3 if available else (6 if parser == '_parsewithvkeysapi' else 4))
-    assert any(entry['id'] > log_id and '状态码 110001，账号被风控无法获取' in entry['message']
+    assert any(entry['id'] > log_id and '接口错误码 110001，账号被风控无法获取' in entry['message']
                for entry in app.original.LOGS)
+    assert any(entry['id'] > log_id and ('臻品母带 2.0（14）' if parser == '_parsewithvkeysapi' else '臻品母带') in entry['message']
+               and '继续尝试其他音质或解析接口' in entry['message'] for entry in app.original.LOGS)
     if available:
         assert result.ext == 'flac' and result.file_size_bytes == audio['file_size_bytes']
         assert result.song_name == '稻香' and result.singers == '周杰伦'
