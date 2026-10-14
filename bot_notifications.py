@@ -228,9 +228,10 @@ class DownloadLinks:
 
 
 class BotService:
-    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None, project_proxy=None, test_channel=None, source_catalog=None):
+    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None, project_proxy=None, test_channel=None, source_catalog=None, search_progress=None):
         self.get, self.put, self.values, self.remove = get, put, values, remove
         self.search, self.enqueue, self.control, self.log = search, enqueue, control, log
+        self.search_progress = search_progress
         self.resolve, self.source_catalog = resolve, source_catalog
         self.config = {key: os.environ.get('MUSICDL_' + key.upper(), default) for key, default in CONFIG_DEFAULTS.items()}
         self.config.update(get('bot_setting', 'config', {}) if config is None else config)
@@ -446,9 +447,9 @@ class BotService:
                  f'第 {page}/{pages} 页 · 共 {len(tracks)} 首']
         if source['state'] == 'searching':
             lines.append('搜索中… 可先切换其他音源，完成后自动更新。')
-        elif not tracks:
+        if not tracks and source['state'] != 'searching':
             lines.append('搜索已停止、失败或超时，请重新搜索或检查音源设置。' if source['state'] == 'failed' else '没有可下载结果，请换关键词或切换音源。')
-        else:
+        elif tracks:
             for index, track in enumerate(visible, start + 1):
                 title = f'{index}. {concise(track["title"], 48)} {concise(track.get("artist"), 24)}'
                 details = f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}'
@@ -491,9 +492,32 @@ class BotService:
         async def run_source(index, source):
             if source['state'] != 'searching':
                 return
+            streamed, last_update = [], 0.0
+            def progress(track):
+                nonlocal last_update
+                if len(streamed) >= 50 or any(t['id'] == track['id'] for t in streamed):
+                    return
+                streamed.append(track)
+                now = time.monotonic()
+                if last_update and now - last_update < 1:
+                    return
+                last_update = now
+                current = self.get('bot_search', result['id'])
+                if not current or current['expires'] <= time.time():
+                    return
+                current['source_states'][index]['tracks'] = list(streamed)
+                self.put('bot_search', current['id'], current)
+                if current['selected'] == index:
+                    self.source_page(message, search_id, current, current.get('page', 1))
             try:
-                tracks, partial = await self.search(result['keyword'], [source['id']])
-                state = {'tracks': rank_tracks(tracks, result['keyword'])[:50], 'state': 'failed' if partial else 'complete'}
+                if self.search_progress and self.search is self.search_progress:
+                    tracks, partial = await self.search_progress(result['keyword'], [source['id']], on_track=progress)
+                else:
+                    tracks, partial = await self.search(result['keyword'], [source['id']])
+                # Preserve the numbers users have already seen on a partial card.
+                seen = {t['id'] for t in streamed}
+                ordered = streamed + [t for t in rank_tracks(tracks, result['keyword']) if t['id'] not in seen]
+                state = {'tracks': ordered[:50], 'state': 'failed' if partial else 'complete'}
             except asyncio.CancelledError:
                 raise
             except Exception as error:

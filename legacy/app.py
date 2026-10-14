@@ -944,7 +944,11 @@ def preview_request(client, source, url, options):
 
 @app.get('/api/stream/{sid}')
 def stream(sid: str, request: Request):
-    song = getsong(sid)
+    return stream_song(sid, request)
+
+
+def stream_song(sid, request, song=None):
+    song = song if song is not None else getsong(sid)
     if song is None:
         raise HTTPException(404, '结果已过期，请重新搜索')
     try:

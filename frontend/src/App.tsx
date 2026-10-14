@@ -4,7 +4,7 @@ import { BotSettings } from "./BotSettings";
 import { RuntimeLogs } from "./RuntimeLogs";
 import { MusicLibrary } from "./MusicLibrary";
 import { PlaylistLibrary } from "./PlaylistLibrary";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AudioLines,
   Search,
@@ -252,15 +252,55 @@ export function App() {
     const timer = setTimeout(() => setNotice(""), 6500);
     return () => clearTimeout(timer);
   }, [notice]);
+  const hasActiveDownloads = jobs.some((job) =>
+    ["queued", "resolving", "downloading", "enriching"].includes(job.status),
+  );
   useEffect(() => {
     if (loginRequired) return;
-    const timer = setInterval(() => {
-      void api<DownloadJob[]>("/downloads")
-        .then(setJobs)
-        .catch(() => {});
-    }, 1500);
-    return () => clearInterval(timer);
-  }, [loginRequired]);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    let running = false;
+    async function poll() {
+      if (running || controller.signal.aborted) return;
+      clearTimeout(timer);
+      running = true;
+      try {
+        if (!document.hidden) {
+          const next = await api<DownloadJob[]>(
+            "/downloads",
+            "GET",
+            undefined,
+            controller.signal,
+          );
+          if (!controller.signal.aborted)
+            setJobs((previous) =>
+              JSON.stringify(previous) === JSON.stringify(next)
+                ? previous
+                : next,
+            );
+        }
+      } catch {
+        /* The next poll recovers transient network failures. */
+      } finally {
+        running = false;
+        if (!controller.signal.aborted)
+          timer = setTimeout(
+            () => void poll(),
+            document.hidden ? 30000 : hasActiveDownloads ? 1500 : 15000,
+          );
+      }
+    }
+    const resume = () => {
+      if (!document.hidden) void poll();
+    };
+    timer = setTimeout(() => void poll(), hasActiveDownloads ? 1500 : 15000);
+    document.addEventListener("visibilitychange", resume);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", resume);
+    };
+  }, [loginRequired, hasActiveDownloads]);
   useEffect(() => {
     if (view === "files")
       api<LibraryFile[]>("/files").then(setFiles).catch(fail);
@@ -271,20 +311,21 @@ export function App() {
     element.volume = volume;
   }, [volume]);
   currentRef.current = current;
-  const favIds = new Set(favorites.map((t) => t.id));
+  const favIds = useMemo(
+    () => new Set(favorites.map((t) => t.id)),
+    [favorites],
+  );
   const tableTracks =
     view === "favorites"
       ? favorites
       : view === "playlists"
         ? activePlaylist?.tracks || []
         : tracks;
-  const display = selectResults(
-    tableTracks,
-    sourceFilter,
-    filter,
-    readyOnly,
-    sort,
+  const display = useMemo(
+    () => selectResults(tableTracks, sourceFilter, filter, readyOnly, sort),
+    [tableTracks, sourceFilter, filter, readyOnly, sort],
   );
+  const lastSearch = useRef("");
   async function search(keyword = query) {
     if (!keyword.trim() || !config) return;
     const generation = ++searchGeneration.current;
@@ -309,7 +350,9 @@ export function App() {
       const { id } = await api<{ id: string }>("/search/jobs", "POST", {
         keyword,
         sources: config.sources,
+        refresh: lastSearch.current === keyword.trim(),
       });
+      lastSearch.current = keyword.trim();
       if (generation !== searchGeneration.current) {
         void api(`/search/jobs/${id}`, "DELETE").catch(() => {});
         return;
@@ -329,11 +372,10 @@ export function App() {
           next[index] = track;
           return next;
         });
-        if (track.playback.state === "ready")
-          setFirstMs(
-            (previous) =>
-              previous ?? Math.round(performance.now() - startTime.current),
-          );
+        setFirstMs(
+          (previous) =>
+            previous ?? Math.round(performance.now() - startTime.current),
+        );
       };
       events.addEventListener("candidate", receive as EventListener);
       events.addEventListener("track", receive as EventListener);
@@ -428,6 +470,9 @@ export function App() {
       const prepared = await api<Track>(`/tracks/${track.id}/playback`, "POST");
       if (generation !== playGeneration.current) return;
       setCurrent(prepared);
+      setTracks((previous) =>
+        previous.map((item) => (item.id === prepared.id ? prepared : item)),
+      );
       if (prepared.playback.state !== "ready" || !prepared.playback.url)
         throw new Error(
           prepared.playback.detail || "曲目暂不可试听，请更换音源",
@@ -575,13 +620,21 @@ export function App() {
     try {
       if (items.some((t) => !t.qualities.length))
         setNotice("正在确认可下载音质…");
-      items = await Promise.all(
-        items.map((t) =>
-          t.qualities.length
-            ? t
-            : api<Track>(`/tracks/${t.id}/versions`, "POST"),
-        ),
-      );
+      const prepared: Track[] = [];
+      for (let offset = 0; offset < items.length; offset += 4) {
+        prepared.push(
+          ...(await Promise.all(
+            items
+              .slice(offset, offset + 4)
+              .map((t) =>
+                t.qualities.length
+                  ? t
+                  : api<Track>(`/tracks/${t.id}/versions`, "POST"),
+              ),
+          )),
+        );
+      }
+      items = prepared;
       const resolved = new Map(items.map((t) => [t.id, t]));
       setTracks((previous) => previous.map((t) => resolved.get(t.id) || t));
       setFavorites((previous) => previous.map((t) => resolved.get(t.id) || t));
@@ -1107,7 +1160,7 @@ export function App() {
           {view !== "search"
             ? ""
             : firstMs !== null
-              ? `首个可试听结果 ${(firstMs / 1000).toFixed(2)} 秒`
+              ? `首个结果 ${(firstMs / 1000).toFixed(2)} 秒`
               : searching
                 ? "正在准备试听资源"
                 : ""}

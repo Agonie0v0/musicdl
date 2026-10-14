@@ -210,6 +210,7 @@ try {
   wav.write("data", 36);
   wav.writeUInt32LE(wav.length - 44, 40);
   const playbackReports = [];
+  let versionRequests = 0;
   let brokenAudio = false;
   let botConfig = {
     public_url: "",
@@ -397,12 +398,14 @@ try {
           "candidate",
           {
             ...track,
+            qualities: keyword === "候选测试" ? [] : track.qualities,
             playback: { ...track.playback, state: "pending", url: null },
           },
         ],
         ["track", track],
         ["done", { cancelled: false }],
       ]
+        .filter(([kind]) => keyword !== "候选测试" || kind !== "track")
         .map(
           ([kind, data], i) =>
             `id: ${i + 1}\nevent: ${kind}\ndata: ${JSON.stringify(data)}\n\n`,
@@ -418,9 +421,10 @@ try {
       result = {
         text: "[00:00.00]测试歌词第一句\n[00:02.00]测试歌词第二句\n[00:05.00]测试歌词第三句",
       };
-    else if (p.endsWith("/playback") || p.endsWith("/versions"))
+    else if (p.endsWith("/playback") || p.endsWith("/versions")) {
+      if (p.endsWith("/versions")) versionRequests++;
       result = p.includes("local-fixture") ? localTrack : track;
-    else if (p.startsWith("/stream/") || p === "/files/audio") {
+    } else if (p.startsWith("/stream/") || p === "/files/audio") {
       await route.fulfill({
         status: 200,
         contentType: "audio/wav",
@@ -511,6 +515,24 @@ try {
     "连接失败",
     "测试",
   ]);
+  const beforeResolve = versionRequests;
+  await submitSearch("候选测试");
+  await expect(page.getByText("音质待确认", { exact: true })).toBeVisible();
+  assert.equal(
+    versionRequests,
+    beforeResolve,
+    "candidate search should not resolve audio automatically",
+  );
+  await page
+    .getByRole("button", { name: "下载 测试曲目", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  assert.equal(versionRequests, beforeResolve + 1);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "取消", exact: true })
+    .click();
+  await expect(page.getByText("音质待确认", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "仅无损", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "仅无损", exact: true }),

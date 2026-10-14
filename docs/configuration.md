@@ -114,6 +114,32 @@ Telegram 文档标注云端上传上限为 50 MB，官方 [Local Bot API Server]
 
 ## 下载与故障排查
 
+### 搜索速度与运行占用
+
+网页的 QQ、网易云搜索默认先显示候选歌曲，音质显示为“待确认”；点击播放或选择下载版本时才调用原引擎解析该曲目，保留原来的无损优先、Cookie、代理和解析器回退策略。候选不是可下载承诺，解析失败会明确提示换源或重试。其他音源继续使用原引擎的完整搜索。机器人仍搜索已解析的曲目，但会在一个音源全部完成前显示已有结果，已展示的下载编号不再随排序改变。
+
+搜索进程按需创建，最多保留两个空闲进程供后续任务复用，默认空闲 20 秒回收。取消或超时会终止正在执行该任务的进程；相同查询的多个订阅者共享任务，只有最后一个订阅者退出才会取消。网页断开后保留 10 秒重连时间，创建后 30 秒未订阅的搜索会自动停止。
+
+成功且非空的查询默认缓存 30 秒，缓存同时受 32 条查询和 8 MiB 序列化数据限制；关键词、音源、完整配置分别参与缓存键。空结果和失败不会缓存。网页连续提交同一个关键词会强制刷新；API 调用者可以在 `POST /api/search/jobs` 中传 `refresh: true`。缓存只短期复用解析结果，外部音频链接仍可能提前失效。
+
+以下环境变量在服务重启后生效；Docker 部署填入 Compose 的 `environment`，本机运行填入 `.env`：
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `MUSICDL_SEARCH_WORKERS` | `4` | 同时执行的音源搜索/按需解析数，范围 1–6；低内存 NAS 可试 2 |
+| `MUSICDL_SEARCH_WORKER_IDLE` | `20` | 空闲进程保留秒数；0 表示每个任务结束即退出 |
+| `MUSICDL_SEARCH_BUDGET` | `120` | 一个音源或按需解析的总执行秒数，不含排队 |
+| `MUSICDL_SEARCH_QUEUE_TIMEOUT` | `30` | 等待搜索槽位的最长秒数 |
+| `MUSICDL_SEARCH_CACHE_TTL` | `30` | 查询缓存秒数；0 关闭已完成结果缓存，仍合并正在执行的相同查询 |
+| `MUSICDL_SONG_CACHE_MB` | `32` | 完整曲目的内存缓存预算，按序列化大小估算，同时最多 3000 首；大曲目保留磁盘副本，按需读取 |
+| `MUSICDL_LAZY_SEARCH` | `1` | QQ、网易网页搜索按需解析；0 恢复搜索时解析所有曲目 |
+
+网页设置里的请求超时仍是单次网络请求超时，与上述总搜索预算不同。运行日志记录每源排队时间、执行时间和首条增量时间。候选列表出现时间与首条可播放时间也不同，评估时需要分别记录。
+
+下载进度文件最多约每秒更新，运行中的进度数据库提交最多约每两秒一次；完成、失败和暂停等状态立即保存。网页有活动下载时约每 1.5 秒刷新，无活动任务时约每 15 秒刷新，后台标签页暂停下载列表请求。歌单解析池限制为一个进程，定期更换进程。曲目缓存预算不是整个服务的内存上限，进程、元数据和活动任务仍占用额外内存。
+
+离线测量重复启动开销：`python tests/benchmark_search.py`。此脚本使用真实引擎和进程通信，但禁用音源网络查询，不能代表实际平台的搜索耗时。
+
 暂停保留临时数据；取消清理临时文件。HTTP 音源支持 Range 且文件校验通过时可续传，否则从头下载。HLS 和专用解密音源取决于原下载器。移除下载记录保留已完成文件，音乐文件页的删除则会删除磁盘文件。
 
 搜索、播放或通知失败时，在 **运行日志** 中按类别和错误级别筛选并导出。日志保留当前进程最近 800 条，重启后清空；Windows 启动问题查看 `logs/startup.log`。
@@ -128,7 +154,7 @@ npm ci --prefix frontend
 npm run build --prefix frontend
 npm run format:check --prefix frontend
 npm test --prefix frontend
-python -m pytest tests/test_engine_compat.py tests/test_resumable_download.py -q
+python -m pytest tests/test_engine_compat.py tests/test_resumable_download.py tests/test_search_runtime.py -q
 python -m pytest tests/test_bot_notifications.py -q
 python -m pytest legacy/tests/test_app.py -q
 python -m pytest tests/test_launcher.py tests/test_docker_entrypoint.py -q

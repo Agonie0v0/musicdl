@@ -10,10 +10,11 @@ import threading
 import time
 import traceback
 import struct
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 
-_clients = {}
+_clients = OrderedDict()
 
 
 @contextmanager
@@ -104,7 +105,7 @@ def playlist_issue(message):
 
 def client_for(config, source=None):
     from legacy import app as original
-    config = copy.deepcopy(config)
+    config = copy.deepcopy({k: v for k, v in config.items() if not k.startswith('_musicdl_')})
     if source:
         config['music_sources'] = [source]
     key = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
@@ -112,8 +113,10 @@ def client_for(config, source=None):
         manager = original.ClientManager()
         manager.config = config
         manager.build()
-        if len(_clients) >= 4:
-            _clients.clear()
+        # Keep one source per reusable worker; avoid retaining many provider sessions.
+        if _clients:
+            # An in-process legacy caller may still be using the previous client.
+            _clients.popitem(last=False)
         _clients[key] = manager.client
     return _clients[key]
 
@@ -122,6 +125,16 @@ def search(config, source, keyword, partial_path=None):
     from legacy import app as original
     client = client_for(config, source)
     provider = client.music_clients[source]
+    if cfg_song := config.get('_musicdl_resolve'):
+        songs = provider._resolve_candidate(copy.deepcopy(cfg_song), client.requests_overrides[source])
+        for song in songs:
+            song.work_dir, song._save_path = provider.work_dir, None
+        return songs
+    provider._musicdl_config = hashlib.sha256(json.dumps({k: v for k, v in config.items() if not k.startswith('_musicdl_')}, sort_keys=True).encode()).hexdigest()
+    provider._musicdl_refresh = bool(config.get('_musicdl_refresh'))
+    provider._musicdl_started = time.time()
+    previous_mode = getattr(provider, '_musicdl_candidates', False)
+    provider._musicdl_candidates = bool(config.get('_musicdl_candidates'))
     original.pushlog('info', f'{source} 搜索参数：每源 {provider.search_size_per_source} 条，'
                      f'每页 {provider.search_size_per_page} 条，严格分页限制 {provider.strict_limit_search_size_per_page}',
                      category='search')
@@ -133,7 +146,7 @@ def search(config, source, keyword, partial_path=None):
         class Results(list):
             def append(self, song):
                 super().append(song)
-                if song.with_valid_download_url:
+                if song.with_valid_download_url or song.raw_data.get('_musicdl_candidate'):
                     try:
                         snapshot = copy.copy(song)
                         snapshot.work_dir, snapshot._save_path = provider.work_dir, None
@@ -166,6 +179,7 @@ def search(config, source, keyword, partial_path=None):
             keyword=keyword, num_threadings=client.clients_threadings[source],
             request_overrides=client.requests_overrides[source], rule=client.search_rules[source])
     finally:
+        provider._musicdl_candidates = previous_mode
         if partial_path:
             provider._search = native_page
     lossless = sum(str(song.ext).lower() in original.MusicClient.LOSSLESS_QUALITY_DEFINITIONS for song in songs)
@@ -209,7 +223,7 @@ def _download(input_path, output_path):
     def publish(force=False):
         nonlocal last_write
         with lock:
-            if not force and time.monotonic() - last_write < .2:
+            if not force and time.monotonic() - last_write < 1:
                 return
             last_write = time.monotonic()
             temporary = str(output_path) + '.tmp'
@@ -273,8 +287,20 @@ def _download(input_path, output_path):
 
 if __name__ == '__main__':
     if sys.argv[1] == '--search':
-        input_path, output_path = Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve()
-        output_path.write_bytes(pickle.dumps(search_logged(*pickle.loads(input_path.read_bytes())),
-                                            protocol=pickle.HIGHEST_PROTOCOL))
+        keep_alive = '--keep-alive' in sys.argv
+        paths = sys.argv[-2:]
+        while paths:
+            input_path, output_path = (Path(p).resolve() for p in paths)
+            try:
+                result = search_logged(*pickle.loads(input_path.read_bytes()))
+            except Exception:
+                result = {'worker_error': '原音源搜索失败，请查看运行日志'}
+            temporary = output_path.with_suffix('.tmp')
+            temporary.write_bytes(pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL))
+            os.replace(temporary, output_path)
+            if not keep_alive:
+                break
+            line = sys.stdin.readline()
+            paths = json.loads(line) if line else None
     else:
         download(sys.argv[1], sys.argv[2])

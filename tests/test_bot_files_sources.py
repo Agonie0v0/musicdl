@@ -16,6 +16,31 @@ from bot_notifications import BotService
 from local_library import download_stem
 
 
+def test_partial_source_card_is_visible_before_completion_and_numbers_stay_stable(setup_bot):
+    _, bot, store, _, track = setup_bot
+    async def scenario():
+        published, finish = asyncio.Event(), asyncio.Event()
+        bot.source_catalog = lambda: [{'id': 'netease', 'label': '网易云'}]
+        async def search(keyword, sources, on_track=None):
+            on_track(track)
+            published.set()
+            await finish.wait()
+            return [dict(track, id='later-track'), track], False
+        bot.search = bot.search_progress = search
+        message = {'id': 'a' * 64, 'channel': 'tg', 'user': '123', 'text': '/search partial'}
+        await bot.command(message)
+        await published.wait()
+        result = store.get('bot_search', 'tg:123:aaaaaaaa')
+        assert result['source_states'][0]['state'] == 'searching'
+        assert result['source_states'][0]['tracks'][0]['id'] == track['id']
+        assert any(track['title'] in item['text'] for item in store.values('bot_outbox'))
+        finish.set()
+        await bot.search_tasks['tg:123']
+        result = store.get('bot_search', 'tg:123:aaaaaaaa')
+        assert [t['id'] for t in result['source_states'][0]['tracks']] == [track['id'], 'later-track']
+    asyncio.run(scenario())
+
+
 def test_independent_sources_switch_while_pending_and_bind_old_buttons(setup_bot):
     _, bot, store, _, track = setup_bot
     async def scenario():

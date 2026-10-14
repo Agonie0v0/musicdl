@@ -28,6 +28,7 @@ from fastapi.exception_handlers import http_exception_handler
 from pydantic import BaseModel, Field
 import engine_worker
 import local_library
+from search_runtime import SearchWorkers, SearchCoordinator, deliver, terminate
 
 BOT_SEARCH_IDLE_TIMEOUT = 90
 
@@ -56,6 +57,7 @@ def source_class(name):
 class SearchBody(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
     sources: list[str] | None = None
+    refresh: bool = False
 
 
 class PlaybackEvent(BaseModel):
@@ -171,6 +173,8 @@ def install(old, root):
                 'source_settings': settings}
 
     def track(song, sid=None):
+        supplied_id = sid is not None
+        candidate = bool(song.raw_data.get('_musicdl_candidate'))
         ext = str(song.ext or '').lower().lstrip('.')
         bitrate = int(song.bitrate or 0) or None
         if bitrate and bitrate > 10000:
@@ -178,6 +182,8 @@ def install(old, root):
         lossless = ext in old.MusicClient.LOSSLESS_QUALITY_DEFINITIONS
         quality = f'engine:{ext or "original"}:{bitrate or 0}'
         sid = sid or hashlib.sha256(f'{song.source}|{song.root_source}|{song.identifier}|{song.song_name}|{song.singers}|{quality}|{song.file_size_bytes}'.encode()).hexdigest()[:24]
+        if candidate and not supplied_id:
+            sid = hashlib.sha256(f'{song.source}|{song.identifier}|{song.raw_data.get("_musicdl_config", "")}|candidate'.encode()).hexdigest()[:24]
         playable = old.songplayable(song)
         label = (ext.upper() + (' 无损' if lossless else f' {bitrate} kbps' if bitrate else '')) if ext else '原音源提供的版本'
         return {'id': sid, 'source': source_id(str(song.source)), 'source_id': str(song.identifier or sid),
@@ -186,28 +192,64 @@ def install(old, root):
                 'size_bytes': song.file_size_bytes if isinstance(song.file_size_bytes, (int, float)) and song.file_size_bytes >= 0 else (len(song.downloaded_contents) if isinstance(song.downloaded_contents, (bytes, bytearray)) else None),
                 'size_label': str(song.file_size) if song.file_size else None,
                 'episodes': len(song.episodes or []), 'root_source': song.root_source or '',
-                'qualities': [{'id': quality, 'label': label, 'codec': ext, 'bitrate': bitrate, 'lossless': lossless,
+                'qualities': [] if candidate else [{'id': quality, 'label': label, 'codec': ext, 'bitrate': bitrate, 'lossless': lossless,
                                'availability': 'resolved', 'evidence': 'engine'}],
-                'playback': {'state': 'ready' if playable else 'download_only', 'url': f'/api/stream/{sid}' if playable else None,
+                'playback': {'state': 'pending' if candidate else 'ready' if playable else 'download_only', 'url': f'/api/stream/{sid}' if playable else None,
                              'codec': ext, 'bitrate': bitrate, 'preview_only': False,
-                             'detail': None if playable else '该解析结果需要原音源下载器处理，可直接下载'}}
+                             'detail': '播放或下载时解析音质与音频地址' if candidate else None if playable else '该解析结果需要原音源下载器处理，可直接下载'}}
+
+    saved_songs = OrderedDict()
+    remember_lock = threading.RLock()
+    song_sizes = OrderedDict()
+    song_bytes = 0
+    song_budget = max(1, int(os.environ.get('MUSICDL_SONG_CACHE_MB', '32'))) * 1024 * 1024
 
     def remember(song, sid=None):
+        nonlocal song_bytes
         value = track(song, sid)
         sid = value['id']
         # No reserialization into a lossy URL-only record: custom stream objects,
         # source headers, downloaded bytes and per-track cookies are preserved.
         path = private / f'{sid}.song'
-        temp = path.with_suffix(f'.{uuid.uuid4().hex}.tmp')
-        temp.write_bytes(pickle.dumps(song, protocol=pickle.HIGHEST_PROTOCOL))
-        os.replace(temp, path)
-        with old.SONG_LOCK:
-            if sid not in old.SONGS and len(old.SONG_ORDER) == old.SONG_ORDER.maxlen:
-                old.SONGS.pop(old.SONG_ORDER[0], None)
-            if sid not in old.SONGS:
-                old.SONG_ORDER.append(sid)
-            old.SONGS[sid] = song
-        put('track', sid, {'track': value})
+        serialized = pickle.dumps(song, protocol=pickle.HIGHEST_PROTOCOL)
+        fingerprint = hashlib.sha256(serialized).digest()
+        with remember_lock:
+            if song.raw_data.get('_musicdl_candidate'):
+                stored = get('track', sid)
+                if (stored and stored.get('resolved_until', 0) > time.time() and path.exists()
+                        and (not song.raw_data.get('_musicdl_refresh')
+                             or stored.get('resolved_at', 0) >= song.raw_data.get('_musicdl_started', float('inf')))):
+                    return stored['track']
+            if saved_songs.get(sid) != fingerprint or not path.exists():
+                temp = path.with_suffix(f'.{uuid.uuid4().hex}.tmp')
+                temp.write_bytes(serialized)
+                os.replace(temp, path)
+                resolved_at = time.time() if not song.raw_data.get('_musicdl_candidate') else 0
+                put('track', sid, {'track': value, 'resolved_at': resolved_at,
+                                   'resolved_until': resolved_at + 60 if resolved_at else 0})
+                saved_songs[sid] = fingerprint
+                saved_songs.move_to_end(sid)
+                while len(saved_songs) > 3000:
+                    saved_songs.popitem(last=False)
+            with old.SONG_LOCK:
+                song_bytes -= song_sizes.pop(sid, 0)
+                old.SONGS.pop(sid, None)
+                if sid in old.SONG_ORDER:
+                    old.SONG_ORDER.remove(sid)
+                size = len(serialized)
+                while size <= song_budget and song_sizes and (song_bytes + size > song_budget or len(old.SONG_ORDER) >= old.SONG_ORDER.maxlen):
+                    evicted, used = song_sizes.popitem(last=False)
+                    song_bytes -= used
+                    old.SONGS.pop(evicted, None)
+                    if evicted in old.SONG_ORDER:
+                        old.SONG_ORDER.remove(evicted)
+                if size <= song_budget:
+                    if len(old.SONG_ORDER) == old.SONG_ORDER.maxlen:
+                        old.SONGS.pop(old.SONG_ORDER.popleft(), None)
+                    old.SONG_ORDER.append(sid)
+                    old.SONGS[sid] = song
+                    song_sizes[sid] = size
+                    song_bytes += size
         return value
 
     def song_for(sid):
@@ -278,10 +320,13 @@ def install(old, root):
                     f'{body.detail}\nMediaError={body.code}，networkState={body.network_state}，readyState={body.ready_state}，'
                     f'播放位置={body.position:.2f}s\n浏览器：{body.browser}', category='playback', task_id=body.track_id)
         return {'recorded': True}
-    search_pool = ProcessPoolExecutor(max_workers=6, mp_context=multiprocessing.get_context('spawn'))
+    search_pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context('spawn'), max_tasks_per_child=8)
     download_pool = ThreadPoolExecutor(max_workers=max(1, min(4, int(os.environ.get('MUSICDL_MAX_DOWNLOAD_TASKS', '2')))))
     searches = OrderedDict()
-    search_slots = asyncio.Semaphore(6)
+    search_slots = asyncio.Semaphore(max(1, min(6, int(os.environ.get('MUSICDL_SEARCH_WORKERS', '4')))))
+    workers = SearchWorkers(root, idle_seconds=max(0, int(os.environ.get('MUSICDL_SEARCH_WORKER_IDLE', '20'))))
+    search_budget = max(1, int(os.environ.get('MUSICDL_SEARCH_BUDGET', '120')))
+    queue_budget = max(1, int(os.environ.get('MUSICDL_SEARCH_QUEUE_TIMEOUT', '30')))
     runners, runner_lock = {}, threading.RLock()
 
     def read_worker_logs(path, cursor=0):
@@ -389,73 +434,98 @@ def install(old, root):
         job['changed'].set()
 
     async def source_results(cfg, source, keyword, on_song=None):
-        # Each search owns its process: cancelling an abandoned request must
-        # free a slot even when the provider is blocked in native I/O.
-        async with search_slots:
-            operation = uuid.uuid4().hex
-            log_path = private / f'{operation}.search.log'
-            input_path = private / f'{operation}.search.input'
-            output_path = private / f'{operation}.search.output'
-            partial_path = private / f'{operation}.search.partial'
-            partial_cursor = 0
-            def read_partial():
-                nonlocal partial_cursor
-                if not on_song or not partial_path.exists():
-                    return
+        queued = time.monotonic()
+        await asyncio.wait_for(search_slots.acquire(), queue_budget)
+        operation = uuid.uuid4().hex
+        log_path = private / f'{operation}.search.log'
+        input_path = private / f'{operation}.search.input'
+        output_path = private / f'{operation}.search.output'
+        partial_path = private / f'{operation}.search.partial'
+        partial_cursor = 0
+        def read_partial():
+            nonlocal partial_cursor
+            songs = []
+            if on_song and partial_path.exists():
                 with partial_path.open('rb') as handle:
                     handle.seek(partial_cursor)
                     while len(header := handle.read(8)) == 8:
                         size = int.from_bytes(header, 'big')
-                        data = handle.read(size)
-                        if len(data) != size:
+                        payload = handle.read(size)
+                        if len(payload) != size:
                             break
-                        on_song(pickle.loads(data))
+                        songs.append(pickle.loads(payload))
                         partial_cursor = handle.tell()
-            process, cursor = None, 0
-            old.pushlog('info', f'{source} 开始搜索：{keyword}', category='search', task_id=operation)
-            try:
-                input_path.write_bytes(pickle.dumps((cfg, source, keyword, str(log_path), operation, str(partial_path))))
-                process = subprocess.Popen([sys.executable, str(root / 'engine_worker.py'), '--search',
-                                            str(input_path), str(output_path)], cwd=root,
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-                                           start_new_session=os.name != 'nt')
-                while process.poll() is None:
-                    cursor = read_worker_logs(log_path, cursor)
-                    read_partial()
+            return songs
+        async def publish_partial():
+            nonlocal first
+            for song in await asyncio.to_thread(read_partial):
+                if first is None:
+                    first = time.monotonic() - started
+                await deliver(on_song, song)
+        process, cursor, reusable, first = None, 0, False, None
+        started = time.monotonic()
+        worker_key = hashlib.sha256(json.dumps([cfg, source], sort_keys=True).encode()).hexdigest()
+        old.pushlog('info', f'{source} 开始搜索：{keyword} · 排队 {started - queued:.2f}s', category='search', task_id=operation)
+        try:
+            async with asyncio.timeout(search_budget):
+                await asyncio.to_thread(input_path.write_bytes, pickle.dumps((cfg, source, keyword, str(log_path), operation, str(partial_path))))
+                process = await workers.acquire(worker_key, input_path, output_path)
+                while not output_path.exists() and process.poll() is None:
+                    cursor = await asyncio.to_thread(read_worker_logs, log_path, cursor)
+                    await publish_partial()
                     await asyncio.sleep(.1)
-                if process.returncode or not output_path.exists():
+                if not output_path.exists():
                     raise RuntimeError('原音源搜索进程异常退出，请查看运行日志')
-                return pickle.loads(output_path.read_bytes())
-            finally:
-                await asyncio.to_thread(terminate, process)
-                read_partial()
-                while log_path.exists():
-                    updated = read_worker_logs(log_path, cursor)
-                    if updated == cursor:
-                        break
-                    cursor = updated
-                for path in (input_path, output_path, log_path, partial_path):
-                    path.unlink(missing_ok=True)
+                songs = pickle.loads(await asyncio.to_thread(output_path.read_bytes))
+                if isinstance(songs, dict) and 'worker_error' in songs:
+                    raise RuntimeError(songs['worker_error'])
+                reusable = True
+                return songs
+        finally:
+            # Keep the slot until termination completes, including cancellation.
+            async def cleanup():
+                nonlocal cursor
+                try:
+                    await workers.release(worker_key, process, reusable)
+                    await publish_partial()
+                    while log_path.exists():
+                        updated = await asyncio.to_thread(read_worker_logs, log_path, cursor)
+                        if updated == cursor:
+                            break
+                        cursor = updated
+                    for path in (input_path, output_path, log_path, partial_path, output_path.with_suffix('.tmp')):
+                        path.unlink(missing_ok=True)
+                    old.pushlog('info', f'{source} 搜索耗时 {time.monotonic() - started:.2f}s · '
+                                f'首条增量 {f"{first:.2f}s" if first is not None else "无"}', category='search', task_id=operation)
+                finally:
+                    search_slots.release()
+            cleanup_task = asyncio.create_task(cleanup())
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                await cleanup_task
+                raise
 
-    async def run_search(job, cfg, sources, keyword):
+    coordinator = SearchCoordinator(source_results, ttl=max(0, int(os.environ.get('MUSICDL_SEARCH_CACHE_TTL', '30'))))
+
+    async def run_search(job, cfg, sources, keyword, refresh=False):
         async def run_source(name):
             sid = source_id(name)
-            emitted = set()
-            def publish(song):
+            emitted = {}
+            async def publish(song):
                 if job['cancelled']:
                     return
-                value = remember(song)
-                if value['id'] not in emitted:
-                    emitted.add(value['id'])
+                value = await asyncio.to_thread(remember, song)
+                if emitted.get(value['id']) != value:
+                    emitted[value['id']] = value
                     emit(job, 'track', value)
             try:
-                songs = await source_results(cfg, name, keyword, publish)
+                songs = await coordinator.run(cfg, name, keyword, publish, refresh)
                 old.pushlog('info', f'{name} 搜索完成，{len(songs)} 个结果', category='search')
                 if job['cancelled']:
                     return
                 for song in songs:
-                    publish(song)
+                    await publish(song)
                 emit(job, 'source', {'id': sid, 'status': {'state': 'complete', 'count': len(songs)}})
             except asyncio.CancelledError:
                 raise
@@ -468,33 +538,40 @@ def install(old, root):
             if not job['done']:
                 emit(job, 'done', {'cancelled': job['cancelled']})
                 job['done'] = True
+            if job.get('disconnect'):
+                job['disconnect'].cancel()
             old.pushlog('info', '搜索已停止' if job['cancelled'] else '全部音源搜索结束', category='search')
 
     @router.post('/api/search/jobs')
     async def search_start(body: SearchBody):
         keyword = body.keyword.strip()
         cfg = copy.deepcopy(old.manager.config)
+        cfg['_musicdl_candidates'] = os.environ.get('MUSICDL_LAZY_SEARCH', '1') != '0'
+        cfg['_musicdl_refresh'] = body.refresh
         sources = [source_class(s) for s in (body.sources or config()['sources'])]
         if not keyword or not sources or any(s not in cfg['music_sources'] or s not in registered for s in sources):
             raise HTTPException(400, '关键词或启用音源无效')
         if sum(not job['done'] for job in searches.values()) >= 6:
             raise HTTPException(429, '同时搜索过多，请先停止旧搜索')
-        while len(searches) >= 128:
+        while len(searches) >= 32:
             ended = next((key for key, value in searches.items() if value['done']), None)
             if ended is None:
                 break
             del searches[ended]
         ident = uuid.uuid4().hex
         old.pushlog('info', f'开始搜索：{keyword}，{len(set(sources))} 个音源', category='search', task_id=ident)
-        job = {'events': [], 'changed': asyncio.Event(), 'done': False, 'cancelled': False}
+        job = {'events': [], 'changed': asyncio.Event(), 'done': False, 'cancelled': False, 'subscribers': 0, 'disconnect': None}
         searches[ident] = job
-        job['task'] = asyncio.create_task(run_search(job, cfg, list(dict.fromkeys(sources)), keyword))
+        job['disconnect'] = asyncio.get_running_loop().call_later(30, lambda: asyncio.create_task(search_stop(ident)))
+        job['task'] = asyncio.create_task(run_search(job, cfg, list(dict.fromkeys(sources)), keyword, body.refresh))
         return {'id': ident}
 
     @router.delete('/api/search/jobs/{ident}')
     async def search_stop(ident: str):
         if ident in searches:
             job = searches[ident]
+            if job.get('disconnect'):
+                job['disconnect'].cancel()
             if not job['done']:
                 if not job['cancelled']:
                     job['cancelled'] = True
@@ -517,25 +594,53 @@ def install(old, root):
             raise HTTPException(400, '事件序号无效')
         async def events():
             nonlocal cursor
-            while True:
-                job['changed'].clear()
-                for sequence, kind, value in list(job['events']):
-                    if sequence > cursor:
-                        cursor = sequence
-                        yield f'id: {sequence}\nevent: {kind}\ndata: {json.dumps(value, ensure_ascii=False)}\n\n'
-                if job['done'] or await request.is_disconnected():
-                    return
-                try:
-                    await asyncio.wait_for(job['changed'].wait(), 10)
-                except asyncio.TimeoutError:
-                    yield ': keepalive\n\n'
+            job['subscribers'] += 1
+            if job.get('disconnect'):
+                job['disconnect'].cancel()
+            try:
+                while True:
+                    job['changed'].clear()
+                    for sequence, kind, value in job['events'][cursor:]:
+                        if sequence > cursor:
+                            cursor = sequence
+                            yield f'id: {sequence}\nevent: {kind}\ndata: {json.dumps(value, ensure_ascii=False)}\n\n'
+                    if job['done'] or await request.is_disconnected():
+                        return
+                    try:
+                        await asyncio.wait_for(job['changed'].wait(), 10)
+                    except asyncio.TimeoutError:
+                        yield ': keepalive\n\n'
+            finally:
+                job['subscribers'] -= 1
+                if not job['done'] and not job['subscribers']:
+                    job['disconnect'] = asyncio.get_running_loop().call_later(
+                        10, lambda: asyncio.create_task(search_stop(ident)))
         return StreamingResponse(events(), media_type='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
+    async def resolved_track(sid):
+        song = await asyncio.to_thread(song_for, sid)
+        if song.raw_data.get('_musicdl_candidate'):
+            cfg = copy.deepcopy(old.manager.config)
+            if song.source not in cfg['music_sources']:
+                raise HTTPException(409, '该音源已停用，请重新搜索')
+            cfg['_musicdl_resolve'] = song.raw_data['search']
+            try:
+                songs = await coordinator.run(cfg, song.source, str(song.identifier),
+                                              refresh=bool(song.raw_data.get('_musicdl_refresh')))
+            except TimeoutError:
+                raise HTTPException(504, '排队或音频解析超时，请稍后重试或更换音源') from None
+            except RuntimeError:
+                raise HTTPException(502, '音源解析失败，请查看运行日志或更换音源') from None
+            if not songs:
+                raise HTTPException(422, '该曲目暂未解析到可用音频，请重试或更换音源')
+            song = songs[0]
+        return await asyncio.to_thread(remember, song, sid)
+
     @router.post('/api/tracks/{sid}/playback')
-    def playback(sid: str):
+    async def playback(sid: str):
         try:
-            record = get('track', sid)
-            result = library_file(record['local_path'])['track'] if record and record.get('local_path') else remember(song_for(sid), sid)
+            record = await asyncio.to_thread(get, 'track', sid)
+            result = (await asyncio.to_thread(library_file, record['local_path']))['track'] if record and record.get('local_path') else await resolved_track(sid)
             old.pushlog('info', f'准备试听：{result["title"]} · {result["source"]} · {result["playback"]["codec"]} · 状态 {result["playback"]["state"]}', category='playback', task_id=sid)
             return result
         except Exception:
@@ -543,18 +648,19 @@ def install(old, root):
             raise
 
     @router.post('/api/tracks/{sid}/versions')
-    def versions(sid: str):
-        return remember(song_for(sid), sid)
+    async def versions(sid: str):
+        return await resolved_track(sid)
 
     @router.get('/api/tracks/{sid}/lyrics')
-    def lyrics(sid: str):
-        record = get('track', sid)
+    async def lyrics(sid: str):
+        record = await asyncio.to_thread(get, 'track', sid)
         if record and record.get('local_path'):
             try:
-                return {'text': local_library.read_lyrics(resolve_library_file(record['local_path']))}
+                return {'text': await asyncio.to_thread(local_library.read_lyrics, resolve_library_file(record['local_path']))}
             except (OSError, ValueError, local_library.mutagen.MutagenError):
                 return {'text': ''}
-        text = song_for(sid).lyric
+        await resolved_track(sid)
+        text = (await asyncio.to_thread(song_for, sid)).lyric
         return {'text': text if text and str(text).lower() not in {'none', 'null'} else ''}
 
     @router.get('/api/tracks/{sid}/episodes')
@@ -564,8 +670,7 @@ def install(old, root):
     @router.get('/api/stream/{sid}')
     def stream(sid: str, request: Request):
         try:
-            song_for(sid)
-            return old.stream(sid, request)
+            return old.stream_song(sid, request, song=song_for(sid))
         except Exception:
             old.pushlog('error', f'试听音频请求失败\n{traceback.format_exc()}', category='playback', task_id=sid)
             raise
@@ -725,6 +830,7 @@ def install(old, root):
                                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
                                            start_new_session=os.name != 'nt')
                 control['process'] = process
+            last_progress, last_saved = None, 0.0
             while process.poll() is None:
                 log_cursor = read_worker_logs(log_path, log_cursor)
                 if output_path.exists():
@@ -734,7 +840,11 @@ def install(old, root):
                             if not control['stop']:
                                 job.update({k: progress[k] for k in ('bytes', 'total_bytes', 'detail') if k in progress})
                                 job['status'] = 'downloading'
-                                put('download', ident, job)
+                                snapshot = (job['bytes'], job['total_bytes'], job['detail'])
+                                now = time.monotonic()
+                                if snapshot != last_progress and now - last_saved >= 2:
+                                    put('download', ident, job)
+                                    last_progress, last_saved = snapshot, now
                     except (ValueError, OSError):
                         pass
                 time.sleep(.25)
@@ -851,16 +961,6 @@ def install(old, root):
                 launch(job, song)
                 result.append(job)
         return result
-
-    def terminate(process):
-        if process and process.poll() is None:
-            if os.name == 'nt':
-                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
-            else:
-                import signal
-                os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=15)
 
     @router.post('/api/downloads/{ident}/{action}')
     def control_download(ident: str, action: str):
@@ -1039,6 +1139,8 @@ def install(old, root):
     async def shutdown():
         for ident in list(searches):
             await search_stop(ident)
+        await coordinator.close()
+        await workers.close()
         for ident in list(runners):
             await asyncio.to_thread(control_download, ident, 'pause')
         if hasattr(search_pool, 'terminate_workers'):
@@ -1057,9 +1159,9 @@ def install(old, root):
     old.app.router.routes[0:0] = router.routes
     old.app.mount('/assets', StaticFiles(directory=root / 'frontend/dist/assets'), name='assets')
     old.app.state.engine_test = {'remember': remember, 'song_for': song_for, 'search_pool': search_pool,
-                                'source_results': source_results, 'config': config, 'registered': registered}
+                                'source_results': source_results, 'config': config, 'registered': registered, 'workers': workers, 'coordinator': coordinator}
 
-    async def bot_search(keyword, sources):
+    async def bot_search(keyword, sources, on_track=None):
         cfg = copy.deepcopy(old.manager.config)
         tracks, partial = {}, False
         async def run_source(source):
@@ -1068,17 +1170,20 @@ def install(old, root):
             if name not in cfg['music_sources'] or name not in registered:
                 raise HTTPException(400, '机器人音源未启用或无效')
             loop = asyncio.get_running_loop()
-            def publish(song):
-                value = remember(song)
+            async def publish(song):
+                value = await asyncio.to_thread(remember, song)
+                fresh = value['id'] not in tracks
                 tracks[value['id']] = value
+                if fresh and on_track:
+                    await deliver(on_track, value)
                 # Slow parsers must not cut off a source that is still returning songs.
                 if not deadline.expired():
                     deadline.reschedule(loop.time() + BOT_SEARCH_IDLE_TIMEOUT)
             try:
                 async with asyncio.timeout(BOT_SEARCH_IDLE_TIMEOUT) as deadline:
-                    songs = await source_results(cfg, name, keyword, publish)
+                    songs = await coordinator.run(cfg, name, keyword, publish)
                     for song in songs:
-                        publish(song)
+                        await publish(song)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -1092,7 +1197,7 @@ def install(old, root):
 
     import bot_notifications
     bot_notifications.install(old.app, get=get, put=put, values=values, remove=remove,
-                              search=bot_search, enqueue=bot_enqueue, control=control_download,
+                              search=bot_search, search_progress=bot_search, enqueue=bot_enqueue, control=control_download,
                               resolve=resolve_library_file, log=old.pushlog,
                               project_proxy=lambda: old.manager.config.get('proxy_url', ''),
                               source_catalog=lambda: [s for s in catalog if s['engine_name'] in old.manager.config['music_sources']])

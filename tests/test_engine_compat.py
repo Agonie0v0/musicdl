@@ -16,7 +16,7 @@ from concurrent.futures import Future
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _root = Path(tempfile.mkdtemp(prefix='musicdl-compat-test-'))
-os.environ.update(MUSICDL_USER='', MUSICDL_PASS='', MUSICDL_COOKIE_SECURE='0',
+os.environ.update(MUSICDL_SEARCH_WORKERS='6', MUSICDL_SEARCH_WORKER_IDLE='0', MUSICDL_SEARCH_CACHE_TTL='0', MUSICDL_USER='', MUSICDL_PASS='', MUSICDL_COOKIE_SECURE='0',
                   MUSICDL_CONFIG=str(_root / 'config.json'), MUSICDL_DATA_DIR=str(_root / 'data'),
                   MUSICDL_FILE_ROOT=str(_root / 'music'), MUSICDL_BIND='127.0.0.1')
 
@@ -28,6 +28,134 @@ import engine_api
 from engine_api import SearchBody
 
 HEADERS = {'X-MusicDL-Request': '1'}
+
+
+@pytest.mark.parametrize('source', ['QQMusicClient', 'NeteaseMusicClient'])
+def test_candidates_skip_audio_requests_and_resolve_with_native_policy(monkeypatch, tmp_path, source):
+    from unittest.mock import Mock
+    from types import SimpleNamespace
+    from musicdl.modules.sources.qq import QQMusicClient
+    from musicdl.modules.sources.netease import NeteaseMusicClient
+    cls = QQMusicClient if source == 'QQMusicClient' else NeteaseMusicClient
+    provider = cls(work_dir=str(tmp_path), search_size_per_source=1, disable_print=True)
+    row = {'mid': 'native-id', 'id': 123, 'title': '候选测试', 'name': '候选测试',
+           'singer': [{'name': '歌手'}], 'artists': [{'name': '歌手'}],
+           'album': {'title': '专辑', 'name': '专辑'}, 'interval': 200, 'duration': 200000}
+    from requests import Response
+    response = Response()
+    response.status_code = 200
+    payload = ({'code': 0, 'music.search.SearchCgiService.DoSearchForQQMusicMobile':
+                {'code': 0, 'data': {'body': {'item_song': [row]}}}} if source == 'QQMusicClient'
+               else {'result': {'songs': [row]}})
+    response._content = json.dumps(payload).encode()
+    provider.post = Mock(return_value=response)
+    provider._parsewiththirdpartapis = Mock(side_effect=AssertionError('candidate must not parse audio'))
+    provider._parsewithofficialapiv1 = Mock(side_effect=AssertionError('candidate must not parse audio'))
+    monkeypatch.setattr(engine_worker, 'client_for', lambda *args: SimpleNamespace(
+        music_clients={source: provider}, clients_threadings={source: 1},
+        requests_overrides={source: {'timeout': 7}}, search_rules={source: {}}))
+    candidates = engine_worker.search({'_musicdl_candidates': True}, source, '候选测试', str(tmp_path / 'partial'))
+    assert len(candidates) == 1, '\n'.join(e['message'] for e in list(app.original.LOGS)[-8:])
+    candidate = candidates[0]
+    assert candidate.song_name == '候选测试' and candidate.duration_s == 200
+    assert candidate.raw_data['_musicdl_candidate'] and not candidate.with_valid_download_url
+    assert not provider._parsewiththirdpartapis.called and not provider._parsewithofficialapiv1.called
+    song = quality_song('flac', 26012257, source)
+    provider._parsewiththirdpartapis = Mock(return_value=song)
+    provider._parsewithofficialapiv1 = Mock(return_value=song)
+    resolved = engine_worker.search({'_musicdl_resolve': row}, source, 'native-id')
+    assert resolved == [song]
+    assert provider.post.call_count == 1  # Resolve never searches the platform again.
+    assert provider._parsewiththirdpartapis.call_args.kwargs['search_result'] == row
+    assert provider._parsewithofficialapiv1.call_args.kwargs['request_overrides'] == {'timeout': 7}
+
+
+def test_identical_song_is_not_written_twice_but_final_metadata_is_saved(monkeypatch):
+    song = fixture_song()
+    song.identifier = 'deduplicated-write'
+    replace = engine_api.os.replace
+    writes = []
+    def observe(src, target):
+        writes.append(target)
+        return replace(src, target)
+    monkeypatch.setattr(engine_api.os, 'replace', observe)
+    remember = app.app.state.engine_test['remember']
+    first = remember(song)
+    assert remember(copy.deepcopy(song)) == first
+    assert len(writes) == 1
+    song.lyric = 'final lyrics'
+    remember(song)
+    assert len(writes) == 2
+    assert app.app.state.engine_test['song_for'](first['id']).lyric == 'final lyrics'
+
+
+def test_candidate_playback_and_lyrics_share_resolution_and_keep_id(monkeypatch):
+    song = fixture_song()
+    song.source, song.identifier = 'QQMusicClient', 'on-demand-fixture'
+    song.download_url, song.downloaded_contents = None, None
+    song.raw_data = {'_musicdl_candidate': True, 'search': {'mid': 'on-demand-fixture'}}
+    candidate = app.app.state.engine_test['remember'](song)
+    assert candidate['qualities'] == [] and candidate['playback']['state'] == 'pending'
+    coordinator = app.app.state.engine_test['coordinator']
+    calls = []
+    async def resolve(cfg, source, keyword, publish):
+        calls.append(cfg['_musicdl_resolve'])
+        await asyncio.sleep(.05)
+        final = quality_song('flac', 26012257, source)
+        final.lyric = 'resolved lyrics'
+        return [final]
+    monkeypatch.setattr(coordinator, 'search', resolve)
+    monkeypatch.setitem(app.original.manager.config, 'music_sources', ['QQMusicClient'])
+    async def check():
+        playback, lyrics = await asyncio.gather(
+            endpoint('/api/tracks/{sid}/playback', 'POST')(candidate['id']),
+            endpoint('/api/tracks/{sid}/lyrics', 'GET')(candidate['id']))
+        assert len(calls) == 1
+        assert playback['id'] == candidate['id'] and playback['qualities'][0]['lossless']
+        assert lyrics['text'] == 'resolved lyrics'
+        # A cached candidate must not overwrite the resolved song.
+        assert app.app.state.engine_test['remember'](song)['qualities'][0]['lossless']
+        # An explicit refresh invalidates the old resolution, while its final
+        # duplicate cannot overwrite a newly resolved song.
+        song.raw_data.update(_musicdl_refresh=True, _musicdl_started=time.time())
+        refreshed = app.app.state.engine_test['remember'](song)
+        assert refreshed['playback']['state'] == 'pending'
+        await endpoint('/api/tracks/{sid}/playback', 'POST')(candidate['id'])
+        assert len(calls) == 2
+        assert app.app.state.engine_test['remember'](song)['qualities'][0]['lossless']
+    asyncio.run(check())
+
+
+def test_oversized_preloaded_audio_stays_on_disk_and_can_still_stream(monkeypatch):
+    from types import SimpleNamespace
+    from starlette.requests import Request
+    song = fixture_song()
+    song.identifier = 'oversized-memory-budget'
+    song.downloaded_contents = b'a' * (33 * 1024 * 1024)
+    value = app.app.state.engine_test['remember'](song)
+    assert app.original.getsong(value['id']) is None
+    monkeypatch.setattr(app.original.manager, 'get', lambda: SimpleNamespace(music_clients={song.source: object()}))
+    request = Request({'type': 'http', 'headers': []})
+    response = endpoint('/api/stream/{sid}', 'GET')(value['id'], request)
+    assert len(response.body) == len(song.downloaded_contents)
+    assert app.original.getsong(value['id']) is None
+
+
+def test_source_budget_terminates_blocked_child_and_removes_ipc(monkeypatch):
+    native_popen, native_timeout = engine_api.subprocess.Popen, asyncio.timeout
+    children = []
+    def blocked(args, **kwargs):
+        child = native_popen([sys.executable, '-c', 'import time; time.sleep(60)'], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(engine_api.subprocess, 'Popen', blocked)
+    monkeypatch.setattr(engine_api.asyncio, 'timeout', lambda seconds: native_timeout(.2))
+    async def check():
+        with pytest.raises(TimeoutError):
+            await app.app.state.engine_test['source_results'](app.original.manager.config, 'QQMusicClient', 'budget')
+        assert children and all(child.poll() is not None for child in children)
+        assert not list((_root / 'data' / 'engine').glob('*.search.input'))
+    asyncio.run(check())
 
 
 def test_bot_uses_shared_engine_queue_and_signed_link_without_web_login(monkeypatch):

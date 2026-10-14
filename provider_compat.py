@@ -5,6 +5,7 @@ import functools
 import inspect
 import json
 import textwrap
+import time
 
 
 def audio_rank(song):
@@ -114,7 +115,59 @@ if not song_info.with_valid_download_url:
             node.body = ast.parse('_musicdl_qq_quality_missing(self, download_result, music_quality)\ncontinue').body
 
 
-def compile_native(native, *, dispatcher=False, qq_search_log=None, qq_quality_log=None):
+def candidate_rows(provider, rows, songs):
+    """Return native rows normally; candidate searches skip all audio parsers."""
+    if not getattr(provider, '_musicdl_candidates', False):
+        return rows
+    from musicdl.modules import SongInfo
+    for row in rows:
+        qq = provider.source == 'QQMusicClient'
+        album = row.get('album') or row.get('al') or {}
+        artists = row.get('singer' if qq else 'artists') or row.get('ar') or []
+        identifier = row.get('mid') or row.get('songmid') if qq else row.get('id')
+        title = row.get('title') or row.get('songname') or row.get('name')
+        if not identifier or not title:
+            continue
+        song = SongInfo(source=provider.source, identifier=str(identifier), song_name=title,
+                        singers=', '.join(a.get('name', '') for a in artists if isinstance(a, dict)),
+                        album=album.get('title') or album.get('name') or row.get('albumname') or '',
+                        duration_s=int(row.get('interval') or 0) if qq else int((row.get('duration') or row.get('dt') or 0) / 1000),
+                        cover_url=album.get('picUrl') or '',
+                        raw_data={'search': copy.deepcopy(row), '_musicdl_candidate': True,
+                                  '_musicdl_config': getattr(provider, '_musicdl_config', ''),
+                                  '_musicdl_refresh': getattr(provider, '_musicdl_refresh', False),
+                                  '_musicdl_started': getattr(provider, '_musicdl_started', time.time())})
+        song.work_dir = provider.work_dir
+        songs.append(song)
+        if len(songs) >= provider.search_size_per_page:
+            break
+    return []
+
+
+def lazy_search_methods(tree, namespace):
+    """Compile the native per-track body as a resolver, keeping parser policy intact."""
+    function = tree.body[0]
+    loop = next(node for node in ast.walk(function) if isinstance(node, ast.For)
+                and isinstance(node.target, ast.Tuple)
+                and [getattr(n, 'id', '') for n in node.target.elts] == ['search_result_idx', 'search_result'])
+    resolver = ast.parse('def _resolve_candidate(self, search_result, request_overrides=None):\n    pass').body[0]
+    # QQ and Netease initialize the cookie-dependent lossless policy here.
+    init = next(node for node in function.body if isinstance(node, ast.Assign)
+                and 'lossless_quality_is_sufficient' in ast.unparse(node.targets[0]))
+    body = [copy.deepcopy(node) for node in loop.body
+            if not any(isinstance(n, ast.Break) or (isinstance(n, ast.Name) and n.id == 'progress')
+                       for n in ast.walk(node))]
+    resolver.body = [copy.deepcopy(init), *ast.parse('song_infos = []').body, *body,
+                     *ast.parse('return song_infos').body]
+    resolver.decorator_list = copy.deepcopy(function.decorator_list)
+    tree.body.append(resolver)
+    loop.iter.args[0] = ast.Call(func=ast.Name(id='_musicdl_candidate_rows', ctx=ast.Load()),
+                                args=[ast.Name(id='self', ctx=ast.Load()), loop.iter.args[0],
+                                      ast.Name(id='song_infos', ctx=ast.Load())], keywords=[])
+    namespace['_musicdl_candidate_rows'] = candidate_rows
+
+
+def compile_native(native, *, dispatcher=False, qq_search_log=None, qq_quality_log=None, lazy_search=False):
     native = inspect.unwrap(native)
     lines, start = inspect.getsourcelines(native)
     tree = ast.parse(textwrap.dedent(''.join(lines)))
@@ -134,8 +187,12 @@ def compile_native(native, *, dispatcher=False, qq_search_log=None, qq_quality_l
                                     args=[ast.Name(id=name, ctx=ast.Load()) for name in
                                           ('self', 'resp', 'search_meta', 'request_overrides', 'page_no')], keywords=[])
         namespace['_musicdl_qq_search_results'] = functools.partial(qq_search_results, log=qq_search_log)
+    if lazy_search:
+        lazy_search_methods(tree, namespace)
     tree = ast.increment_lineno(ast.fix_missing_locations(tree), start - 1)
     exec(compile(tree, inspect.getsourcefile(native), 'exec'), namespace)
+    if lazy_search:
+        return namespace[native.__name__], namespace['_resolve_candidate']
     return namespace[native.__name__]
 
 
@@ -183,8 +240,9 @@ def install(log):
                 quality_log = log if cls is qq.QQMusicClient and name in {'_parsewithvkeysapi', '_parsewithxcvtsapi'} else None
                 methods[name] = observe(compile_native(getattr(cls, name), qq_quality_log=quality_log), cls.source, name, log)
             methods['_parsewiththirdpartapis'] = compile_native(cls._parsewiththirdpartapis, dispatcher=True)
-            if cls is qq.QQMusicClient:
-                methods['_search'] = compile_native(cls._search, qq_search_log=log)
+            if cls in (qq.QQMusicClient, netease.NeteaseMusicClient):
+                methods['_search'], methods['_resolve_candidate'] = compile_native(
+                    cls._search, qq_search_log=log if cls is qq.QQMusicClient else None, lazy_search=True)
             methods['_removeduplicates'] = keep_quality_variants
             for name, method in methods.items():
                 setattr(cls, name, method)
