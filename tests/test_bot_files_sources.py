@@ -320,7 +320,9 @@ def test_server_size_rejection_falls_back_to_link_without_reupload(setup_bot, re
     assert not item['file']
     assert bot.telegram.call_args.args[0] == 'sendMessage'
     assert bot.telegram.call_args.args[1]['reply_markup']['inline_keyboard'][0][0]['url'].startswith('https://music.example.com/downloads/')
-    assert reason in bot.telegram.call_args.args[1]['text']
+    text = bot.telegram.call_args.args[1]['text']
+    assert reason not in text
+    assert '文件超过当前接口允许的上传大小' in text
     assert any(reason in call.args[1] and '拒绝文件大小' in call.args[1] for call in bot.log.call_args_list)
 
 
@@ -384,7 +386,8 @@ def test_size_rejection_link_notification_retry_does_not_upload_again(setup_bot)
                     break
             item = store.values('bot_outbox')[0]
             assert item['attempts'] == 1 and not item['file'] and item['url']
-            assert 'file is too big' in item['text']
+            assert 'file is too big' not in item['text']
+            assert '文件超过当前接口允许的上传大小' in item['text']
         finally:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
@@ -405,7 +408,8 @@ def test_size_rejection_without_public_url_reports_the_actual_error(setup_bot):
     bot.telegram = Mock(side_effect=[RuntimeError('Telegram API error 413: file too big'), True])
     bot.send(store.values('bot_outbox')[-1])
     text = bot.telegram.call_args.args[1]['text']
-    assert '413: file too big' in text and 'Web 下载原文件' in text
+    assert '413: file too big' not in text
+    assert '文件超过当前接口允许的上传大小' in text and 'Web 下载原文件' in text
 
 
 def test_slow_file_upload_does_not_block_search_card_delivery(setup_bot):

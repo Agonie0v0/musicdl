@@ -348,7 +348,7 @@ class BotService:
         return re.sub(r'https?://[^\s<>\'\"]+', '[地址已隐藏]', detail)[:2000]
 
     def error_reason(self, error):
-        return explain_error(error) or self.error_detail(error)
+        return explain_error(error) or '通知发送失败，请查看运行日志中的原始信息并检查网络、凭据或服务状态。'
 
     def telegram_url(self):
         return LOCAL_URL if self.config['tg_local_enabled'] else self.config['tg_api_url']
@@ -968,8 +968,7 @@ class BotService:
                 self.log('warning', f'Telegram 已尝试上传，但接口拒绝文件大小：{self.job_size(job)} · {raw_reason}；' +
                          ('改发原文件下载链接' if url else '未配置访问地址，改发失败原因，请在 Web 下载原文件'),
                          category='bot', task_id=item['job_id'])
-                mapped = reason if reason == raw_reason else f'{reason}\n原始错误：{raw_reason}'
-                item.update(file=False, url=url, text=item['text'] + f'\nTelegram 拒绝了文件上传：{mapped}\n' +
+                item.update(file=False, url=url, text=item['text'] + f'\nTelegram 拒绝了文件上传：{reason}\n' +
                             ('已改为原文件下载链接。' if url else '请在 Web 下载原文件，或在通知设置中填写访问地址后获取链接。'))
                 # The delivery worker persists this mutation on failure; retries then only send the link.
         if item['channel'] == 'tg':
