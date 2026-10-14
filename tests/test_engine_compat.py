@@ -668,6 +668,57 @@ def native_quality_provider(name):
     return provider
 
 
+@pytest.mark.parametrize('empty_primary', [False, True])
+def test_qq_empty_search_retries_signed_native_endpoint_without_losing_song(monkeypatch, empty_primary):
+    from unittest.mock import Mock
+    import requests
+    from musicdl.modules.sources.qq import QQMusicClientUtils
+    provider = native_quality_provider('QQMusicClient')
+    provider.default_search_headers = {'Referer': 'https://y.qq.com/'}
+    provider._initsession = Mock()
+    provider.use_encrypted_endpoint = False
+    provider.strict_limit_search_size_per_page = True
+    provider.search_size_per_page = 5
+    provider.logger_handle = Mock()
+    provider.disable_print = True
+    song = quality_song('flac', 26012257, 'QQMusicClient')
+    song.song_name, song.singers = '稻香', '周杰伦'
+    provider._parsewiththirdpartapis = Mock(return_value=song)
+    provider._parsewithofficialapiv1 = Mock(return_value=song)
+    payload = {'music.search.SearchCgiService.DoSearchForQQMusicMobile': {'param': {'query': '稻香 周杰伦', 'page_num': 2, 'num_per_page': 5}}}
+    record = {'mid': 'song-mid', 'title': '稻香', 'singer': [{'name': '周杰伦'}]}
+    def response(records):
+        value = requests.Response()
+        value.status_code = 200
+        value._content = json.dumps({'code': 0, 'music.search.SearchCgiService.DoSearchForQQMusicMobile':
+                                    {'code': 0, 'data': {'body': {'item_song': records}}}}).encode()
+        return value
+    provider.post = Mock(side_effect=[response([] if empty_primary else [record]), response([record])])
+    overrides = {'timeout': 17, 'proxies': {'https': 'http://proxy.example:7890'}, 'headers': {'X-Required': 'keep'},
+                 'params': {'custom': 'keep'}}
+    request = {'url': QQMusicClientUtils.endpoint, 'data': json.dumps(payload).encode(), 'page_no': 2}
+    songs = []
+    provider._search('稻香 周杰伦', request, overrides, songs, Mock())
+    assert songs == [song] and song.song_name == '稻香' and song.singers == '周杰伦'
+    assert provider.post.call_count == (2 if empty_primary else 1)
+    if empty_primary:
+        assert provider.post.call_args.args[0] == QQMusicClientUtils.enc_endpoint
+        options = provider.post.call_args.kwargs
+        assert options['data'] == request['data'] and json.loads(options['data']) == payload
+        assert options['params'] == {'custom': 'keep', 'sign': QQMusicClientUtils.sign(payload)}
+        assert all(options[k] == overrides[k] for k in ('timeout', 'proxies', 'headers'))
+    assert not provider.use_encrypted_endpoint and overrides['params'] == {'custom': 'keep'}
+
+
+def test_native_empty_search_error_is_reported_as_failure(monkeypatch, tmp_path):
+    def fail(*args):
+        app.original.pushlog('error', 'QQMusicClient._search >>> 稻香 on page 1 (Error: rejected)')
+        return []
+    monkeypatch.setattr(engine_worker, 'search', fail)
+    with pytest.raises(RuntimeError, match='搜索请求失败'):
+        engine_worker.search_logged({}, 'QQMusicClient', '稻香', str(tmp_path / 'search.log'), 'diagnostic')
+
+
 def quality_song(ext, size, source='KugouMusicClient'):
     return SongInfo(source=source, identifier='same-platform-id', song_name='同一歌曲', singers='歌手',
                     ext=ext, file_size_bytes=size, duration_s=200,

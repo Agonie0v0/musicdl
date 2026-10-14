@@ -395,7 +395,8 @@ class BotService:
         for index, track in enumerate(visible, start + 1):
             source = SOURCE_LABELS.get(track['source'], track['source'].removesuffix('MusicClient'))
             if message['channel'] == 'tg':
-                lines.append(f'{index}. {concise(track["title"], 48)} {concise(track["artist"], 24)}')
+                lines.append(f'{index}. {concise(track["title"], 48)} {concise(track["artist"], 24)} · '
+                             f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}')
             else:
                 lines.extend([f'{index}. {concise(track["title"])}',
                               f'{concise(track["artist"], 24)} · {concise(source, 16)}',
@@ -436,16 +437,19 @@ class BotService:
         if message.get('reply_message_id'):
             result['message_id'] = message['reply_message_id']
         self.put('bot_search', result['id'], result)
-        lines = [f'搜索源：{source["label"]} · 第 {page}/{pages} 页 · 共 {len(tracks)} 首']
+        lines = [f'搜索源：{source["label"]} · {concise(result["keyword"], 60)}',
+                 f'第 {page}/{pages} 页 · 共 {len(tracks)} 首']
         if source['state'] == 'searching':
             lines.append('搜索中… 可先切换其他音源，完成后自动更新。')
         elif not tracks:
             lines.append('搜索已停止、失败或超时，请重新搜索或检查音源设置。' if source['state'] == 'failed' else '没有可下载结果，请换关键词或切换音源。')
         else:
             for index, track in enumerate(visible, start + 1):
-                lines.append(f'{index}. {concise(track["title"], 48)} {concise(track.get("artist"), 24)}')
+                title = f'{index}. {concise(track["title"], 48)} {concise(track.get("artist"), 24)}'
+                details = f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}'
+                lines.append(title + ' · ' + details if message['channel'] == 'tg' else title)
                 if message['channel'] == 'wecom':
-                    lines.append(f'{concise(track["qualities"][0]["label"], 20)} · {track_size(track)}')
+                    lines.append(details)
             if source['state'] == 'failed':
                 lines.append('该音源部分结果已返回，其余失败或超时。')
         buttons = button_rows([{'text': str(i), 'callback_data': f'/download {search_id} {i} {selected}'}

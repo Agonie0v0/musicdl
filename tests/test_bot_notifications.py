@@ -105,6 +105,7 @@ def test_search_cards_pagination_and_download_indices(setup_bot):
         first = store.values('bot_outbox')[-1]
         assert '第 1/2 页' in first['text'] and '共 10 首' in first['text']
         assert '8. 歌曲7' in first['text'] and '9. 歌曲8' not in first['text']
+        assert 'FLAC 无损 · 1.0 MB' in first['text'] and 'FLAC 无损 · 8.0 MB' in first['text']
         assert '部分音源' in first['text']
         assert '歌曲0 长标题' in first['text'] and '…' in first['text']
         assert [b['text'] for b in first['buttons'][0]] == [str(i) for i in range(1, 9)]
@@ -112,6 +113,7 @@ def test_search_cards_pagination_and_download_indices(setup_bot):
         await bot.command({**message, 'text': '/results aaaaaaaa 2', 'reply_message_id': 42})
         second = store.values('bot_outbox')[-1]
         assert '第 2/2 页' in second['text'] and '9. 歌曲8' in second['text']
+        assert 'FLAC 无损 · 9.0 MB' in second['text'] and 'FLAC 无损 · 10.0 MB' in second['text']
         assert second['edit_message_id'] == 42
         assert second['buttons'][0][0]['callback_data'] == '/download aaaaaaaa 9'
         bot.telegram = Mock()

@@ -3,6 +3,7 @@ import ast
 import copy
 import functools
 import inspect
+import json
 import textwrap
 
 
@@ -49,13 +50,57 @@ for parser_func in parsers:
     function.body[position:position + 1] = [empty, replacement]
 
 
-def compile_native(native, *, dispatcher=False):
+def qq_search_results(provider, response, search_meta, request_overrides, page_no, *, log):
+    from musicdl.modules.sources.qq import QQMusicClientUtils, resp2json
+    key = 'music.search.SearchCgiService.DoSearchForQQMusicMobile'
+
+    def read(response, endpoint):
+        response.raise_for_status()
+        data = resp2json(resp=response)
+        block = data.get(key) or {}
+        songs = (block.get('data') or {}).get('body', {}).get('item_song') or []
+        codes = (data.get('code'), block.get('code'))
+        log('info', f'QQMusicClient {endpoint}搜索响应：第 {page_no} 页，状态码 {codes}，原始曲目 {len(songs)} 条', category='search')
+        return songs, codes
+
+    songs, codes = read(response, '签名' if provider.use_encrypted_endpoint else '普通')
+    if songs:
+        return songs
+    # Reuse the native payload and signing implementation; leave account,
+    # proxy, pagination and audio parsing settings intact.
+    signed = not provider.use_encrypted_endpoint
+    endpoint = '签名' if signed else '普通'
+    log('warning', f'QQMusicClient 搜索接口未返回曲目，尝试原引擎{endpoint}接口', category='search')
+    options = {**search_meta, **(request_overrides or {})}
+    params = {**(search_meta.get('params') or {}), **(options.get('params') or {})}
+    if signed:
+        params['sign'] = QQMusicClientUtils.sign(json.loads(search_meta['data']))
+    else:
+        params.pop('sign', None)
+    options['params'] = params
+    response = provider.post(QQMusicClientUtils.enc_endpoint if signed else QQMusicClientUtils.endpoint, **options)
+    songs, codes = read(response, endpoint)
+    if not songs and any(code not in (None, 0) for code in codes):
+        raise RuntimeError(f'QQ 搜索接口拒绝请求，状态码 {codes}')
+    return songs
+
+
+def compile_native(native, *, dispatcher=False, qq_search_log=None):
+    native = inspect.unwrap(native)
     lines, start = inspect.getsourcelines(native)
     tree = ast.parse(textwrap.dedent(''.join(lines)))
     tree = RequestKeywords().visit(tree)
     if dispatcher:
         prefer_lossless(tree)
     namespace = dict(native.__globals__, _musicdl_audio_rank=audio_rank)
+    if qq_search_log is not None:
+        loop = next(n for n in ast.walk(tree) if isinstance(n, ast.For)
+                    and isinstance(n.iter, ast.Call) and isinstance(n.iter.func, ast.Name)
+                    and n.iter.func.id == 'enumerate' and 'item_song' in ast.unparse(n.iter))
+        loop.iter.args[0] = ast.Call(func=ast.Name(id='_musicdl_qq_search_results', ctx=ast.Load()),
+                                    args=[ast.Name(id=name, ctx=ast.Load()) for name in
+                                          ('self', 'resp', 'search_meta', 'request_overrides', 'page_no')], keywords=[])
+        namespace['_musicdl_qq_search_results'] = functools.partial(qq_search_results, log=qq_search_log)
     tree = ast.increment_lineno(ast.fix_missing_locations(tree), start - 1)
     exec(compile(tree, inspect.getsourcefile(native), 'exec'), namespace)
     return namespace[native.__name__]
@@ -104,6 +149,8 @@ def install(log):
                     continue
                 methods[name] = observe(compile_native(getattr(cls, name)), cls.source, name, log)
             methods['_parsewiththirdpartapis'] = compile_native(cls._parsewiththirdpartapis, dispatcher=True)
+            if cls is qq.QQMusicClient:
+                methods['_search'] = compile_native(cls._search, qq_search_log=log)
             methods['_removeduplicates'] = keep_quality_variants
             for name, method in methods.items():
                 setattr(cls, name, method)

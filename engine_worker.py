@@ -42,9 +42,17 @@ def capture_logs(path, category, task_id, transform=None):
 
 def search_logged(config, source, keyword, path, task_id, partial_path=None):
     from legacy import app as original
-    with capture_logs(path, 'search', task_id):
+    errors = []
+    def observe(level, message):
+        if level == 'error' and str(message).startswith(f'{source}._search >>>'):
+            errors.append(message)
+        return message
+    with capture_logs(path, 'search', task_id, transform=observe):
         try:
-            return search(config, source, keyword, partial_path)
+            songs = search(config, source, keyword, partial_path)
+            if not songs and errors:
+                raise RuntimeError('原音源搜索请求失败，请查看运行日志')
+            return songs
         except Exception:
             original.pushlog('error', f'{source} 搜索异常\n{traceback.format_exc()}')
             raise

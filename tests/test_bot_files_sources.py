@@ -24,7 +24,8 @@ def test_independent_sources_switch_while_pending_and_bind_old_buttons(setup_bot
                                       {'id': 'kuwo', 'label': '酷我'}, {'id': 'kugou', 'label': '酷狗'}]
         async def search(keyword, sources):
             await (fast if sources == ['netease'] else slow).wait()
-            return [{**track, 'id': sources[0] + str(i), 'title': f'歌曲{i}', 'source': sources[0]} for i in range(10)], False
+            return [{**track, 'id': sources[0] + str(i), 'title': f'歌曲{i}', 'source': sources[0],
+                     'size_bytes': (i + 1) * 1024 * 1024} for i in range(10)], False
         bot.search = search
         message = {'id': 'a' * 64, 'channel': 'tg', 'user': '123', 'text': '/search 测试'}
         await bot.command(message)
@@ -37,7 +38,9 @@ def test_independent_sources_switch_while_pending_and_bind_old_buttons(setup_bot
             await asyncio.sleep(0)
         first = store.values('bot_outbox')[-1]
         assert '共 10 首' in first['text']
-        assert len(first['text'].splitlines()) == 9
+        assert len(first['text'].splitlines()) == 10
+        assert '搜索源：网易云 · 测试' in first['text']
+        assert 'FLAC 无损 · 1.0 MB' in first['text'] and 'FLAC 无损 · 8.0 MB' in first['text']
         assert '8. 歌曲7' in first['text'] and '9. 歌曲8' not in first['text']
         assert [b['text'] for b in first['buttons'][0]] == [str(i) for i in range(1, 9)]
         assert first['buttons'][1][0]['text'] == '下一页'
@@ -62,6 +65,7 @@ def test_independent_sources_switch_while_pending_and_bind_old_buttons(setup_bot
         assert '第 2/2 页' in store.values('bot_outbox')[-1]['text']
         assert '网易云' in store.values('bot_outbox')[-1]['text']
         assert store.values('bot_outbox')[-1]['buttons'][0][0]['callback_data'] == '/download aaaaaaaa 9 0'
+        assert 'FLAC 无损 · 9.0 MB' in store.values('bot_outbox')[-1]['text']
         await bot.command({**message, 'text': '下一页'})
         assert '最后一页' in store.values('bot_outbox')[-1]['text']
         await bot.command({**message, 'text': '上一页'})
