@@ -7,6 +7,9 @@ type BotConfig = {
   bot_sources: string;
   tg_enabled: boolean;
   tg_api_url: string;
+  tg_local_enabled: boolean;
+  tg_local_api_id: string;
+  local_api_status: { available: boolean; running: boolean; detail: string };
   tg_proxy_mode: "direct" | "project" | "custom";
   wecom_enabled: boolean;
   tg_allowed_users: string;
@@ -23,6 +26,7 @@ type BotConfig = {
 const secretFields = [
   "tg_token",
   "tg_proxy",
+  "tg_local_api_hash",
   "wecom_secret",
   "wecom_token",
   "wecom_aes_key",
@@ -41,6 +45,11 @@ export function BotSettings() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    channel: string;
+    state: "loading" | "success" | "error";
+    detail: string;
+  } | null>(null);
   async function load() {
     try {
       setConfig(await api<BotConfig>("/bots/config"));
@@ -70,6 +79,7 @@ export function BotSettings() {
     setConfig((current) => current && { ...current, [key]: value });
     setDirty(true);
     setMessage("");
+    setTestResult(null);
   }
   function field(key: keyof BotConfig, label: string, placeholder = "") {
     return (
@@ -127,7 +137,8 @@ export function BotSettings() {
     );
   }
   function draftPayload() {
-    const { configured, status, callback_url, ...values } = config!;
+    const { configured, status, callback_url, local_api_status, ...values } =
+      config!;
     return {
       ...values,
       ...Object.fromEntries(
@@ -142,20 +153,28 @@ export function BotSettings() {
     setBusy(true);
     setError("");
     setMessage("");
+    setTestResult({ channel, state: "loading", detail: "正在检查，请稍候…" });
     try {
-      setMessage(
-        (
-          await api<{ detail: string }>("/bots/test", "POST", {
-            channel,
-            config: draftPayload(),
-          })
-        ).detail,
-      );
+      const result = await api<{ detail: string }>("/bots/test", "POST", {
+        channel,
+        config: draftPayload(),
+      });
+      setTestResult({ channel, state: "success", detail: result.detail });
     } catch (e) {
-      setError((e as Error).message);
+      setTestResult({ channel, state: "error", detail: (e as Error).message });
     } finally {
       setBusy(false);
     }
+  }
+  function feedback(channel: string) {
+    return testResult?.channel === channel ? (
+      <p
+        className={testResult.state === "error" ? "log-error" : "test-result"}
+        role={testResult.state === "error" ? "alert" : "status"}
+      >
+        {testResult.detail}
+      </p>
+    ) : null;
   }
   return (
     <form
@@ -253,11 +272,12 @@ export function BotSettings() {
             "Telegram 用户白名单",
             "数字用户 ID，多个用逗号分隔",
           )}
-          {field(
-            "tg_api_url",
-            "Telegram Bot API 地址",
-            "https://api.telegram.org",
-          )}
+          {!config.tg_local_enabled &&
+            field(
+              "tg_api_url",
+              "Telegram Bot API 地址",
+              "https://api.telegram.org",
+            )}
           <label>
             Telegram 代理
             <select
@@ -273,6 +293,49 @@ export function BotSettings() {
             </select>
           </label>
         </div>
+        <label className="ready-filter">
+          <input
+            type="checkbox"
+            checked={Boolean(config.tg_local_enabled)}
+            onChange={(e) => update("tg_local_enabled", e.target.checked)}
+          />
+          使用内置 Telegram 本地服务（大文件上传）
+        </label>
+        {config.tg_local_enabled && (
+          <div className="local-api-settings">
+            <p>
+              内置服务：{config.local_api_status?.running ? "运行中" : "未启动"}
+              。
+              {config.local_api_status?.available
+                ? "官方程序已就绪。"
+                : "当前环境未找到官方程序，请更新 Docker 镜像；源码部署需安装 telegram-bot-api。"}
+              {config.local_api_status?.detail}
+            </p>
+            <div className="settings-grid">
+              {field(
+                "tg_local_api_id",
+                "Telegram API ID",
+                "my.telegram.org 的应用 API ID",
+              )}
+              {secret("tg_local_api_hash", "Telegram API Hash")}
+            </div>
+            <p>
+              在{" "}
+              <a
+                href="https://my.telegram.org/apps"
+                target="_blank"
+                rel="noreferrer"
+              >
+                my.telegram.org
+              </a>{" "}
+              获取应用凭据，与 Bot Token 不同。
+              保存后自动启动官方本地模式服务，上传支持最高 2000
+              MB。首次切换会退出原 API 服务；切回云端可能需要等待 Telegram
+              规定的 10 分钟。 本地服务需要服务器网络能直连 Telegram，下面的
+              HTTP 代理仅用于外部 Bot API 请求。
+            </p>
+          </div>
+        )}
         <p>
           从 BotFather 获取 Token。白名单填写数字用户
           ID；使用长轮询接收命令，请移除该机器人的已有 webhook。
@@ -291,6 +354,7 @@ export function BotSettings() {
         >
           测试 Telegram 连接
         </button>
+        {feedback("tg")}
       </section>
       <section className="settings-section settings-sources">
         <h2>
@@ -344,6 +408,7 @@ export function BotSettings() {
         >
           测试企业微信连接
         </button>
+        {feedback("wecom")}
       </section>
       <section className="settings-section settings-sources">
         <h2>更多下载通知渠道</h2>
@@ -388,6 +453,7 @@ export function BotSettings() {
             >
               检查 {label} 配置
             </button>
+            {feedback(channel)}
           </details>
         ))}
       </section>

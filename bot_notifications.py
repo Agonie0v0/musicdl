@@ -20,6 +20,8 @@ from requests_toolbelt.multipart.encoder import MultipartEncoder
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
+from error_messages import explain_error
+from telegram_local import LocalBotAPI, LOCAL_URL
 
 
 HELP = ('musicdl · 功能菜单\n\n'
@@ -42,12 +44,13 @@ SOURCE_LABELS = {'migu': '咪咕', 'netease': '网易云', 'qq': 'QQ音乐', 'ku
                  'QQMusicClient': 'QQ音乐', 'KuwoMusicClient': '酷我', 'QianqianMusicClient': '千千'}
 CONFIG_DEFAULTS = {'public_url': '', 'link_ttl_seconds': 86400, 'bot_sources': '',
                    'tg_token': '', 'tg_allowed_users': '', 'tg_proxy': '', 'tg_api_url': 'https://api.telegram.org',
+                   'tg_local_enabled': False, 'tg_local_api_id': '', 'tg_local_api_hash': '',
                    'wecom_corp_id': '', 'wecom_agent_id': '', 'wecom_secret': '',
                    'wecom_token': '', 'wecom_aes_key': '', 'wecom_allowed_users': '',
                    'discord_webhook': '', 'feishu_webhook': '', 'feishu_sign_secret': '',
                    'dingtalk_webhook': '', 'dingtalk_sign_secret': ''}
 WEBHOOK_CHANNELS = ('discord', 'feishu', 'dingtalk')
-SECRET_FIELDS = {'tg_token', 'tg_proxy', 'wecom_secret', 'wecom_token', 'wecom_aes_key',
+SECRET_FIELDS = {'tg_token', 'tg_proxy', 'tg_local_api_hash', 'wecom_secret', 'wecom_token', 'wecom_aes_key',
                  *(channel + '_webhook' for channel in WEBHOOK_CHANNELS), 'feishu_sign_secret', 'dingtalk_sign_secret'}
 
 
@@ -228,7 +231,7 @@ class DownloadLinks:
 
 
 class BotService:
-    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None, project_proxy=None, test_channel=None, source_catalog=None, search_progress=None):
+    def __init__(self, get, put, values, remove, search, enqueue, control, resolve, log, config=None, project_proxy=None, test_channel=None, source_catalog=None, search_progress=None, local_api=None):
         self.get, self.put, self.values, self.remove = get, put, values, remove
         self.search, self.enqueue, self.control, self.log = search, enqueue, control, log
         self.search_progress = search_progress
@@ -236,6 +239,8 @@ class BotService:
         self.config = {key: os.environ.get('MUSICDL_' + key.upper(), default) for key, default in CONFIG_DEFAULTS.items()}
         self.config.update(get('bot_setting', 'config', {}) if config is None else config)
         cfg = self.config
+        self.local_api = local_api or LocalBotAPI(log)
+        cfg['tg_local_enabled'] = str(cfg['tg_local_enabled']).lower() in {'true', '1'}
         self.project_proxy = project_proxy or (lambda: '')
         cfg.setdefault('tg_proxy_mode', 'custom' if cfg['tg_proxy'] else 'direct')
         if cfg['tg_proxy_mode'] not in {'direct', 'project', 'custom'}:
@@ -276,6 +281,8 @@ class BotService:
         if cfg['tg_enabled']:
             if not self.tg_token:
                 raise ValueError('请填写 Telegram Bot Token')
+            if cfg['tg_local_enabled']:
+                self.local_api.credentials(cfg)
             if not test_channel and (not self.tg_users or any(not re.fullmatch(r'[1-9][0-9]*', u) for u in self.tg_users)):
                 raise ValueError('请配置 MUSICDL_TG_ALLOWED_USERS（Telegram 数字用户 ID 白名单）')
         if cfg['wecom_enabled']:
@@ -327,6 +334,7 @@ class BotService:
 
     def public_config(self):
         return {**{key: value for key, value in self.config.items() if key not in SECRET_FIELDS},
+                'local_api_status': self.local_api.status(),
                 'configured': {key: bool(self.config[key]) for key in SECRET_FIELDS},
                 'status': {'tg': bool(self.tg_token), 'wecom': bool(self.crypt),
                            **{c: bool(self.config[c + '_enabled']) for c in WEBHOOK_CHANNELS}},
@@ -338,6 +346,12 @@ class BotService:
             if self.config[key]:
                 detail = detail.replace(self.config[key], '[已隐藏]')
         return re.sub(r'https?://[^\s<>\'\"]+', '[地址已隐藏]', detail)[:2000]
+
+    def error_reason(self, error):
+        return explain_error(error) or self.error_detail(error)
+
+    def telegram_url(self):
+        return LOCAL_URL if self.config['tg_local_enabled'] else self.config['tg_api_url']
 
     def reply(self, message, text, url=None, buttons=None, job_id=None, edit_message_id=None, file=False, card_key=None):
         # WeCom text messages have a byte limit; split without cutting UTF-8.
@@ -736,15 +750,16 @@ class BotService:
             self.put('bot_inbox', message['id'], message)
             self.pending.task_done()
 
-    def telegram(self, method, body, timeout=15, files=None):
+    def telegram(self, method, body, timeout=15, files=None, api_url=None):
         # Resolve per request so changing or clearing the project proxy takes effect.
-        proxy = self.telegram_proxy() or None
+        origin = api_url or self.telegram_url()
+        proxy = None if origin == LOCAL_URL else self.telegram_proxy() or None
         if files:
             encoder = MultipartEncoder(fields={**{k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) for k, v in body.items()}, **files})
             payload = {'data': encoder, 'headers': {'Content-Type': encoder.content_type}}
         else:
             payload = {'json': body}
-        response = self.tg_http.post(f'{self.config["tg_api_url"]}/bot{self.tg_token}/{method}', **payload, timeout=timeout,
+        response = self.tg_http.post(f'{origin}/bot{self.tg_token}/{method}', **payload, timeout=timeout,
                                      proxies={'http': proxy, 'https': proxy})
         if response.status_code == 413:
             raise RuntimeError('Telegram API error 413: file too big')
@@ -948,11 +963,13 @@ class BotService:
                     raise
                 job = self.get('download', item['job_id']) or {}
                 url = self.links.create(job) if self.links else None
-                reason = self.error_detail(error)
-                self.log('warning', f'Telegram 已尝试上传，但接口拒绝文件大小：{self.job_size(job)} · {reason}；' +
+                raw_reason = self.error_detail(error)
+                reason = self.error_reason(error)
+                self.log('warning', f'Telegram 已尝试上传，但接口拒绝文件大小：{self.job_size(job)} · {raw_reason}；' +
                          ('改发原文件下载链接' if url else '未配置访问地址，改发失败原因，请在 Web 下载原文件'),
                          category='bot', task_id=item['job_id'])
-                item.update(file=False, url=url, text=item['text'] + f'\nTelegram 拒绝了文件上传：{reason}\n' +
+                mapped = reason if reason == raw_reason else f'{reason}\n原始错误：{raw_reason}'
+                item.update(file=False, url=url, text=item['text'] + f'\nTelegram 拒绝了文件上传：{mapped}\n' +
                             ('已改为原文件下载链接。' if url else '请在 Web 下载原文件，或在通知设置中填写访问地址后获取链接。'))
                 # The delivery worker persists this mutation on failure; retries then only send the link.
         if item['channel'] == 'tg':
@@ -1122,6 +1139,7 @@ class BotService:
 
 
 def install(app, **services):
+    services['local_api'] = LocalBotAPI(services['log'])
     bot = BotService(**services)
     router = APIRouter()
     config_lock = asyncio.Lock()
@@ -1167,12 +1185,31 @@ def install(app, **services):
         async with config_lock:
             candidate = configured_bot(body)
             cfg = candidate.config
-            # Validate completely before replacing a working service.
-            services['put']('bot_setting', 'config', cfg)
-            await bot.stop()
             previous = bot
+            local = services['local_api']
+            # Start the child before migration; no Telegram requests are sent by this check.
+            try:
+                if previous.tg_token and candidate.tg_token and (previous.telegram_url() != candidate.telegram_url()
+                                          or previous.tg_token != candidate.tg_token):
+                    await asyncio.to_thread(previous.telegram, 'logOut', {})
+                await previous.stop()
+                if candidate.tg_token and cfg['tg_local_enabled']:
+                    await local.start(cfg)
+                services['put']('bot_setting', 'config', cfg)
+            except Exception as error:
+                if previous.tg_token and previous.config['tg_local_enabled']:
+                    await local.start(previous.config)
+                else:
+                    await local.stop()
+                await previous.start()
+                candidate.tg_http.close()
+                candidate.wecom_http.close()
+                previous.log('error', f'通知配置未保存：{candidate.error_detail(error)}', category='bot')
+                raise HTTPException(502, '配置未保存：' + candidate.error_reason(error))
             bot = candidate
             app.state.bots = bot
+            if not (candidate.tg_token and cfg['tg_local_enabled']):
+                await local.stop()
             if cfg['tg_token'] != previous.config['tg_token']:
                 services['put']('bot_setting', 'tg_offset', 0)
             await bot.start()
@@ -1188,6 +1225,13 @@ def install(app, **services):
             candidate = configured_bot(body['config'], test_channel=channel) if 'config' in body else bot
             try:
                 if channel == 'tg' and candidate.tg_token:
+                    if candidate.config['tg_local_enabled']:
+                        try:
+                            candidate.local_api.validate(candidate.config)
+                        except ValueError as error:
+                            raise HTTPException(400, str(error)) from None
+                        if not candidate.local_api.matches(candidate.config):
+                            return {'detail': '内置服务程序和配置格式检查通过。保存后启动并切换服务，再次测试可验证 Telegram 连接；本次未退出云端或发送消息。'}
                     check = lambda: candidate.telegram('getMe', {})
                 elif channel == 'wecom' and candidate.secret:
                     check = candidate.wecom_access
@@ -1200,7 +1244,7 @@ def install(app, **services):
                 except Exception as error:
                     detail = candidate.error_detail(error)
                     bot.log('error', f'{channel} 连接测试失败：{detail}', category='bot')
-                    raise HTTPException(502, f'连接测试失败：{detail}')
+                    raise HTTPException(502, f'连接测试失败：{candidate.error_reason(error)}（原始错误：{detail}）')
             finally:
                 if candidate is not bot:
                     candidate.tg_http.close()
@@ -1254,9 +1298,15 @@ def install(app, **services):
 
     app.include_router(router)
     async def start():
+        if bot.tg_token and bot.config['tg_local_enabled']:
+            try:
+                await bot.local_api.start(bot.config)
+            except Exception as error:
+                bot.log('error', f'内置 Telegram 服务未启动：{bot.error_detail(error)}；请在通知设置中修正后保存', category='bot')
         await bot.start()
     async def stop():
         await bot.stop()
+        await bot.local_api.stop()
     app.router.add_event_handler('startup', start)
     # Stop command intake before the shared engine pauses workers on shutdown.
     app.router.on_shutdown.insert(0, stop)

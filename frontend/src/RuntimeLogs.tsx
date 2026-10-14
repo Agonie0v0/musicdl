@@ -10,6 +10,7 @@ type LogEntry = {
   category?: string;
   task_id?: string | null;
   message: string;
+  reason?: string | null;
 };
 const categories: Record<string, string> = {
   system: "服务",
@@ -77,7 +78,7 @@ export function RuntimeLogs({ active }: { active: boolean }) {
           : entry.level === level)) &&
       (category === "all" || (entry.category || "system") === category) &&
       (!needle ||
-        `${entry.message} ${entry.task_id || ""} ${logTime(entry.time)} ${categories[entry.category || "system"] || ""}`
+        `${entry.reason || ""} ${entry.message} ${entry.task_id || ""} ${logTime(entry.time)} ${categories[entry.category || "system"] || ""}`
           .toLowerCase()
           .includes(needle)),
   );
@@ -90,7 +91,7 @@ export function RuntimeLogs({ active }: { active: boolean }) {
     const text = filtered
       .map(
         (entry) =>
-          `[${logTime(entry.time)}] [${entry.level.toUpperCase()}] [${categories[entry.category || "system"] || entry.category}]${entry.task_id ? ` [${entry.task_id}]` : ""} ${entry.message}`,
+          `[${logTime(entry.time)}] [${entry.level.toUpperCase()}] [${categories[entry.category || "system"] || entry.category}]${entry.task_id ? ` [${entry.task_id}]` : ""} ${entry.reason ? entry.reason + "\n" : ""}${entry.message}`,
       )
       .join("\n");
     const url = URL.createObjectURL(
@@ -217,7 +218,19 @@ export function RuntimeLogs({ active }: { active: boolean }) {
             <code className="log-task" title={entry.task_id || undefined}>
               {entry.task_id?.slice(0, 8) || "—"}
             </code>
-            <pre>{entry.message}</pre>
+            <div className="log-content">
+              {entry.reason ? (
+                <>
+                  <p>{entry.reason}</p>
+                  <details>
+                    <summary>查看原始信息</summary>
+                    <pre>{entry.message}</pre>
+                  </details>
+                </>
+              ) : (
+                <pre>{entry.message}</pre>
+              )}
+            </div>
           </li>
         ))}
         {!filtered.length && (

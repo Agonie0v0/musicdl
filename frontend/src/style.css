@@ -1322,6 +1322,25 @@ tr.current {
     "Microsoft YaHei UI",
     monospace;
 }
+.log-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.log-content p {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.log-content summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.bot-settings .test-result {
+  margin-top: 10px;
+}
+.local-api-settings {
+  margin-top: 12px;
+}
 .log-row[data-level="error"] {
   background: color-mix(in srgb, var(--danger) 5%, var(--surface));
 }

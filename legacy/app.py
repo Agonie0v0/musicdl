@@ -200,11 +200,22 @@ def redactlog(message):
 
 
 def pushlog(level: str, message: str, category='system', task_id=None, timestamp=None):
+    try:
+        from error_messages import explain_error
+    except ModuleNotFoundError:
+        # The legacy app is also launched directly from ``legacy/`` in
+        # compatibility checks, where the project root is not on sys.path.
+        root = str(Path(__file__).resolve().parent.parent)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from error_messages import explain_error
     global LOG_SEQUENCE
     with LOG_LOCK:
         LOG_SEQUENCE += 1
         entry = {'id': LOG_SEQUENCE, 'time': timestamp or datetime.now(timezone.utc).isoformat(timespec='seconds'),
                  'level': level, 'category': category, 'task_id': task_id, 'message': redactlog(message)}
+        if level in {'warning', 'error'}:
+            entry['reason'] = explain_error(message)
         LOGS.append(entry)
         return entry
 
