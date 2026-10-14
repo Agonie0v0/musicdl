@@ -114,6 +114,11 @@ def job_progress(job):
     return f'已下载 {format_size(downloaded)} · 总大小未知'
 
 
+def telegram_size_error(error):
+    return bool(re.search(r'error 413\b|file (?:is )?too (?:big|large)|(?:request entity|request payload|payload) too large',
+                          str(error).replace('_', ' '), re.I))
+
+
 def quality_rank(quality):
     codec = str(quality.get('codec') or '').lower()
     lossless = bool(quality.get('lossless') or codec in {'flac', 'wav', 'alac', 'ape', 'wv', 'tta', 'dsf', 'dff'}
@@ -789,9 +794,9 @@ class BotService:
         if job.get('status') != 'complete' or not job.get('file'):
             raise HTTPException(409, '任务尚未完成或文件已删除')
         target = self.resolve(job['file'])
-        limit = (50 if urlsplit(self.config['tg_api_url']).hostname == 'api.telegram.org' else 2000) * 1024 * 1024 if message['channel'] == 'tg' else 20 * 1024 * 1024
+        limit = 20 * 1024 * 1024
         text = f'下载完成\n{concise(job["track"]["title"])} · {concise(job["track"].get("artist"))}\n{self.job_size(job)}'
-        if target.stat().st_size > limit:
+        if message['channel'] == 'wecom' and target.stat().st_size > limit:
             if self.links:
                 self.reply(message, text + f'\n文件超过该渠道上传上限（{format_size(limit)}），请通过链接下载原文件。',
                            url=self.links.create(job), job_id=job['id'])
@@ -806,22 +811,35 @@ class BotService:
             raise HTTPException(409, '文件不可访问，请重新下载')
         target = self.resolve(job['file'])
         if item['channel'] == 'tg':
-            audio = target.suffix.lower() in {'.mp3', '.m4a'}
+            audio = target.suffix.lower() in {'.mp3', '.m4a', '.flac'}
+            method = 'sendAudio' if audio else 'sendDocument'
             field = 'audio' if audio else 'document'
+            size = target.stat().st_size
+            self.log('info', f'Telegram 开始上传：{concise(target.name)} · {format_size(size)}（{size} 字节）· {method}' +
+                     ('；超过 50 MB，仍尝试直接发送，以 API 实际响应为准' if size > 50 * 1024 * 1024 else ''),
+                     category='bot', task_id=job['id'])
             body = {'chat_id': item['user'], 'caption': item['text'][:1000]}
             if audio:
                 body.update(title=job['track']['title'], performer=job['track'].get('artist', ''))
             with target.open('rb') as handle:
                 try:
-                    self.telegram('sendAudio' if audio else 'sendDocument', body, timeout=(15, 600),
-                                  files={field: (target.name, handle)})
+                    upload = (target.name, handle, 'audio/flac') if audio and target.suffix.lower() == '.flac' else (target.name, handle)
+                    sent = self.telegram(method, body, timeout=(15, 600), files={field: upload})
                 except RuntimeError as error:
                     # Only format rejection falls back to a document; transport failures retry in the outbox.
-                    if not audio or not re.search(r'(audio|file|content|format|media)', str(error), re.I) or 'error 400' not in str(error):
+                    if telegram_size_error(error) or not audio or not re.search(r'(audio|file|content|format|media)', str(error), re.I) or 'error 400' not in str(error):
                         raise
+                    self.log('warning', f'Telegram sendAudio 拒绝音频格式：{self.error_detail(error)}；改用 sendDocument 发送原文件，不转码',
+                             category='bot', task_id=job['id'])
                     handle.seek(0)
-                    self.telegram('sendDocument', {'chat_id': item['user'], 'caption': item['text'][:1000]},
-                                  timeout=(15, 600), files={'document': (target.name, handle)})
+                    method = 'sendDocument'
+                    sent = self.telegram(method, {'chat_id': item['user'], 'caption': item['text'][:1000]},
+                                         timeout=(15, 600), files={'document': (target.name, handle)})
+            media_type = next((key for key in ('audio', 'document') if isinstance(sent, dict) and key in sent), '')
+            media = sent[media_type] if media_type else {}
+            self.log('info', f'Telegram {method} 上传成功：{concise(target.name)} · {format_size(size)}（{size} 字节）' +
+                     (f'；API 消息类型 {media_type}，MIME {concise(media.get("mime_type") or "未提供")}' if media_type else ''),
+                     category='bot', task_id=job['id'])
             return
         self.wecom_access()
         media_id = item.get('media_id') if item.get('media_until', 0) > time.time() else None
@@ -902,12 +920,17 @@ class BotService:
             except (HTTPException, FileNotFoundError):
                 item = {**item, 'file': False, 'text': '文件已删除或不可访问，请重新下载。'}
             except RuntimeError as error:
-                if item['channel'] != 'tg' or not re.search(r'error 413|file (?:is )?too (?:big|large)|request entity too large', str(error), re.I):
+                if item['channel'] != 'tg' or not telegram_size_error(error):
                     raise
                 job = self.get('download', item['job_id']) or {}
                 url = self.links.create(job) if self.links else None
-                item = {**item, 'file': False, 'url': url, 'text': item['text'] + '\nAPI 拒绝了文件大小，请通过链接下载；自建 Bot API 请确认以 --local 启动。' if url else
-                        item['text'] + '\nAPI 拒绝了文件大小，请配置访问地址后获取链接，或检查自建 Bot API 的 --local 模式。'}
+                reason = self.error_detail(error)
+                self.log('warning', f'Telegram 已尝试上传，但接口拒绝文件大小：{self.job_size(job)} · {reason}；' +
+                         ('改发原文件下载链接' if url else '未配置访问地址，改发失败原因，请在 Web 下载原文件'),
+                         category='bot', task_id=item['job_id'])
+                item.update(file=False, url=url, text=item['text'] + f'\nTelegram 拒绝了文件上传：{reason}\n' +
+                            ('已改为原文件下载链接。' if url else '请在 Web 下载原文件，或在通知设置中填写访问地址后获取链接。'))
+                # The delivery worker persists this mutation on failure; retries then only send the link.
         if item['channel'] == 'tg':
             body = {'chat_id': item['user'], 'text': item['text'], 'link_preview_options': {'is_disabled': True}}
             if item.get('url'):
@@ -1024,7 +1047,8 @@ class BotService:
                     self.file_send = asyncio.create_task(asyncio.to_thread(self.send, item))
                     await asyncio.shield(self.file_send)
                     self.remove('bot_outbox', item['id'])
-                    self.log('info', f'{item["channel"]} 文件发送成功', category='bot', task_id=item['job_id'])
+                    self.log('info', f'{item["channel"]} ' + ('文件发送成功' if item.get('file') else '文件回退通知已发送'),
+                             category='bot', task_id=item['job_id'])
                 except Exception as error:
                     item['attempts'] += 1
                     item['next'] = int(time.time()) + min(3600, 5 * 2 ** min(item['attempts'], 10))

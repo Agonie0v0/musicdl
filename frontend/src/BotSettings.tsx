@@ -183,8 +183,9 @@ export function BotSettings() {
       <section className="settings-section settings-basics">
         <h2>文件交付与下载链接</h2>
         <p>
-          Telegram 和企业微信选择曲目后直接发送原文件。Telegram 的 MP3 / M4A
-          可直接播放，其他格式以文件发送。超出附件上限时使用下载链接。
+          Telegram 和企业微信选择曲目后直接发送原文件。Telegram 的 MP3 / M4A /
+          FLAC 优先以音频消息发送，格式被拒绝时改发普通文件。Telegram
+          大文件也先尝试上传，接口拒绝大小后再发送下载链接。
         </p>
         <div className="settings-grid">
           {field("public_url", "公网访问地址", "http://192.168.1.20:8765")}
@@ -275,10 +276,12 @@ export function BotSettings() {
         <p>
           从 BotFather 获取 Token。白名单填写数字用户
           ID；使用长轮询接收命令，请移除该机器人的已有 webhook。
-          项目代理地址在“音源与设置”中配置和修改，选择后与音源共用。 云端 API
-          附件上限为 50 MB；自建 Local Bot API（需以 --local 启动）为 2000
-          MB，在上方填写服务地址。发送原文件保留音质；FLAC
-          等格式能否在聊天内播放取决于客户端。
+          项目代理地址在“音源与设置”中配置和修改，选择后与音源共用。Telegram
+          文档标注云端上传上限为 50 MB，自建 Local Bot API（需以 --local
+          启动）为 2000
+          MB；项目不按这两个数值提前拦截，均先尝试发送，以接口实际响应为准。
+          上传大小、发送方式、成功或拒绝原因均会记录在运行日志中。FLAC
+          直接发送原文件，不转码；聊天内能否播放取决于客户端。
         </p>
         <button
           type="button"

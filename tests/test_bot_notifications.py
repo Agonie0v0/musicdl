@@ -384,22 +384,28 @@ def test_commands_bind_results_and_tasks_to_user(setup_bot):
 
 def test_completion_delivery_retries_without_downloading_again(setup_bot, monkeypatch):
     _, bot, store, audio, track = setup_bot
-    # Oversized attachments still use renewable signed links.
+    # Server-rejected uploads use renewable signed links.
     with audio.open('r+b') as handle:
         handle.truncate(51 * 1024 * 1024)
     job = completed_job(audio, track)
     store.put('download', job['id'], job)
     store.put('bot_task', job['id'], {'id': job['id'], 'owner': 'tg:123', 'channel': 'tg', 'user': '123', 'notified': None})
-    bot.send = Mock(side_effect=requests.ConnectionError('offline'))
+    bot.telegram = Mock(side_effect=[RuntimeError('Telegram API error 413: file too big'), requests.ConnectionError('offline')])
 
     async def scenario():
         worker = asyncio.create_task(bot.deliveries())
         for _ in range(100):
             await asyncio.sleep(.01)
+            if store.values('bot_outbox'):
+                break
+        file_worker = asyncio.create_task(bot.file_deliveries())
+        for _ in range(100):
+            await asyncio.sleep(.01)
             if store.values('bot_outbox') and store.values('bot_outbox')[0]['attempts'] == 1:
                 break
         worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
+        file_worker.cancel()
+        await asyncio.gather(worker, file_worker, return_exceptions=True)
         assert len(store.values('bot_outbox')) == 1
         assert store.get('bot_task', job['id'])['notified'] == 'complete'
         bot.enqueue.assert_not_called()

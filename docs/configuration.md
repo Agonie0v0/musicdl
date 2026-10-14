@@ -77,9 +77,9 @@ Docker 在 Compose 中配置登录账号和密码；源码运行可复制 [.env.
 
 Telegram 也可点击消息按钮操作。搜索先显示全部已启用音源按钮，各源并行执行，完成后更新当前卡片；切换到未完成的源显示“搜索中”。机器人音源留空跟随 Web 已启用音源，填写时必须使用已启用的音源 ID 或完整引擎名称。每源最多保留 50 首，每页 5 首。企业微信发送 `音源 2` 切换音源。
 
-机器人与网页共用下载队列。Telegram 的 MP3 / M4A 使用 `sendAudio`，可直接播放与保存；FLAC 等使用 `sendDocument` 发送原文件，不转码。企业微信上传临时素材后发送文件。文件采用流式上传，不把整个附件读入内存，上传期间不阻塞搜索卡片更新。Telegram 云端上限 50 MB，企业微信文件上限 20 MB；超限时返回签名下载链接。附件发送失败保留通知重试，不重新下载曲目；`/file 任务编号` 可重新发送文件，`/link 任务编号` 可获取链接。
+机器人与网页共用下载队列。Telegram 的 MP3 / M4A / FLAC 优先使用 `sendAudio`；FLAC 上传时保留原文件名和字节，并标记 `audio/flac`，客户端支持时可在聊天内播放。音频格式被明确拒绝后才改用 `sendDocument`，不转码。文件采用流式上传，不把整个附件读入内存，上传期间不阻塞搜索卡片更新。Telegram 文件均先尝试上传，超过 50 MB 也不提前拦截；接口明确拒绝文件大小后回退到签名下载链接，并在日志和通知中显示实际错误。已拒绝上传的文件在链接通知重试时不会重复上传。企业微信仍使用临时素材发送文件，超过 20 MB 时提供链接。网络错误保留通知重试，不重新下载曲目；`/file 任务编号` 可重新尝试发送文件，`/link 任务编号` 可获取链接。
 
-Telegram 大文件可使用官方 [Local Bot API Server](https://core.telegram.org/bots/api#using-a-local-bot-api-server)，以 `--local` 模式运行后在 Web 设置填写 API 地址（例如 `http://telegram-bot-api:8081`，或环境变量 `MUSICDL_TG_API_URL`）。上限提高至 2000 MB，并非无限制。切换服务器前按官方部署说明从云端 API `logOut`；本项目通过 multipart 上传，不需要两个服务共享音乐目录。普通 `api.telegram.org` 继续使用 50 MB 上限。仅使用 Telegram 文件交付时访问地址可留空，超限文件需配置地址后通过链接下载。
+Telegram 文档标注云端上传上限为 50 MB，官方 [Local Bot API Server](https://core.telegram.org/bots/api#using-a-local-bot-api-server) 的 `--local` 模式为 2000 MB。可在 Web 设置填写自建 API 地址（例如 `http://telegram-bot-api:8081`，或环境变量 `MUSICDL_TG_API_URL`）。本项目不会按这两个数值提前拒绝文件，以实际接口响应为准，这不代表已验证云端可突破 50 MB。切换服务器前按官方部署说明从云端 API `logOut`；本项目通过 multipart 上传，不需要两个服务共享音乐目录。仅使用 Telegram 文件交付时访问地址可留空，大小被拒绝后的下载链接需要配置访问地址。实测时可在“运行日志 → 通知与机器人”查看原文件大小、`sendAudio` / `sendDocument`、API 是否接受以及回退原因；上传被接受也需在实际客户端确认 FLAC 播放。
 
 ### 飞书、钉钉、Discord 下载通知
 

@@ -73,7 +73,8 @@ def test_independent_sources_switch_while_pending_and_bind_old_buttons(setup_bot
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('extension, method, field', [('flac', 'sendDocument', 'document'), ('mp3', 'sendAudio', 'audio'), ('m4a', 'sendAudio', 'audio')])
+@pytest.mark.parametrize('extension, method, field', [('flac', 'sendAudio', 'audio'), ('mp3', 'sendAudio', 'audio'),
+                                                     ('m4a', 'sendAudio', 'audio'), ('wav', 'sendDocument', 'document')])
 def test_original_file_upload_and_custom_api(setup_bot, extension, method, field):
     _, bot, store, audio, track = setup_bot
     target = audio.with_suffix('.' + extension)
@@ -87,6 +88,8 @@ def test_original_file_upload_and_custom_api(setup_bot, extension, method, field
         assert url == f'http://127.0.0.1:8081/bottest-token/{method}'
         encoder = kwargs['data']
         assert encoder.fields[field][0] == target.name
+        if extension == 'flac':
+            assert encoder.fields[field][2] == 'audio/flac'
         assert encoder.fields['chat_id'] == '123'
         payload = encoder.read()
         assert target.read_bytes() in payload
@@ -123,14 +126,14 @@ def test_new_search_cancels_previous_and_old_card_stops_loading(setup_bot):
     asyncio.run(scenario())
 
 
-def test_file_size_fallback_and_local_api_limit(setup_bot):
+def test_tg_large_files_are_queued_for_upload_and_wecom_keeps_its_limit(setup_bot):
     _, bot, store, audio, track = setup_bot
     with audio.open('r+b') as handle:
         handle.truncate(51 * 1024 * 1024)
     job = completed_job(audio, track)
     bot.queue_file({'channel': 'tg', 'user': '123'}, job)
-    assert store.values('bot_outbox')[-1]['url']
-    assert '超过' in store.values('bot_outbox')[-1]['text']
+    assert store.values('bot_outbox')[-1]['file']
+    assert not store.values('bot_outbox')[-1]['url']
     bot.config['tg_api_url'] = 'http://127.0.0.1:8081'
     bot.queue_file({'channel': 'tg', 'user': '123'}, job)
     assert store.values('bot_outbox')[-1]['file']
@@ -251,36 +254,133 @@ def test_download_filename_sanitizes_paths_and_byte_length():
     assert len(download_stem('长' * 200, '名' * 200).encode('utf-8')) <= 201
 
 
-def test_large_upload_streams_without_reading_whole_file(setup_bot):
+@pytest.mark.parametrize('api_url', ['https://api.telegram.org', 'http://127.0.0.1:8081'])
+def test_large_upload_streams_without_reading_whole_file(setup_bot, api_url):
     _, bot, store, audio, track = setup_bot
     with audio.open('r+b') as handle:
         handle.truncate(100 * 1024 * 1024)
     job = completed_job(audio, track)
     store.put('download', job['id'], job)
-    bot.config['tg_api_url'] = 'http://127.0.0.1:8081'
+    bot.config['tg_api_url'] = api_url
     bot.tg_http = Mock()
     def post(url, **kwargs):
+        assert url == api_url + '/bottest-token/sendAudio'
         encoder = kwargs['data']
         assert encoder.len > 100 * 1024 * 1024
-        assert encoder.fields['document'][1].tell() == 0
+        assert encoder.fields['audio'][1].tell() == 0
         chunk = encoder.read(8192)
         assert len(chunk) == 8192
-        assert encoder.fields['document'][1].tell() < 8192
-        return Mock(json=lambda: {'ok': True, 'result': True})
+        assert encoder.fields['audio'][1].tell() < 8192
+        return Mock(json=lambda: {'ok': True, 'result': {'audio': {'mime_type': 'audio/flac'}}})
     bot.tg_http.post.side_effect = post
     bot.queue_file({'channel': 'tg', 'user': '123'}, job)
     bot.send(store.values('bot_outbox')[-1])
+    messages = [call.args[1] for call in bot.log.call_args_list]
+    assert any('超过 50 MB' in text and '104857600 字节' in text for text in messages)
+    assert any('sendAudio 上传成功' in text and 'API 消息类型 audio，MIME audio/flac' in text for text in messages)
 
 
-def test_server_size_rejection_falls_back_to_link(setup_bot):
+@pytest.mark.parametrize('reason', ['Telegram API error 413: file too big',
+    'Telegram API error 400: Bad Request: file is too big',
+    'Telegram API error 400: FILE_TOO_LARGE', 'Telegram API error 413: Request Entity Too Large'])
+def test_server_size_rejection_falls_back_to_link_without_reupload(setup_bot, reason):
     _, bot, store, audio, track = setup_bot
+    job = completed_job(audio, track)
+    store.put('download', job['id'], job)
+    bot.queue_file({'channel': 'tg', 'user': '123'}, job)
+    bot.telegram = Mock(side_effect=[RuntimeError(reason), True])
+    item = store.values('bot_outbox')[-1]
+    bot.send(item)
+    assert [call.args[0] for call in bot.telegram.call_args_list] == ['sendAudio', 'sendMessage']
+    assert not item['file']
+    assert bot.telegram.call_args.args[0] == 'sendMessage'
+    assert bot.telegram.call_args.args[1]['reply_markup']['inline_keyboard'][0][0]['url'].startswith('https://music.example.com/downloads/')
+    assert reason in bot.telegram.call_args.args[1]['text']
+    assert any(reason in call.args[1] and '拒绝文件大小' in call.args[1] for call in bot.log.call_args_list)
+
+
+def test_flac_format_rejection_sends_original_document_from_the_start(setup_bot):
+    _, bot, store, audio, track = setup_bot
+    original = audio.read_bytes()
+    job = completed_job(audio, track)
+    store.put('download', job['id'], job)
+    bot.tg_http = Mock()
+    methods = []
+    def post(url, **kwargs):
+        method = url.rsplit('/', 1)[-1]
+        methods.append(method)
+        field = 'audio' if method == 'sendAudio' else 'document'
+        encoder = kwargs['data']
+        assert encoder.fields[field][0] == audio.name
+        assert encoder.fields[field][1].tell() == 0
+        assert original in encoder.read()
+        if method == 'sendAudio':
+            assert encoder.fields[field][2] == 'audio/flac'
+            return Mock(json=lambda: {'ok': False, 'error_code': 400, 'description': 'Bad Request: AUDIO_CONTENT_TYPE_INVALID'})
+        return Mock(json=lambda: {'ok': True, 'result': {'document': {'mime_type': 'audio/flac'}}})
+    bot.tg_http.post.side_effect = post
+    bot.queue_file({'channel': 'tg', 'user': '123'}, job)
+    bot.send(store.values('bot_outbox')[-1])
+    assert methods == ['sendAudio', 'sendDocument']
+    assert audio.read_bytes() == original
+    messages = [call.args[1] for call in bot.log.call_args_list]
+    assert any('AUDIO_CONTENT_TYPE_INVALID' in text and '改用 sendDocument' in text for text in messages)
+    assert any('sendDocument 上传成功' in text for text in messages)
+    bot.enqueue.assert_not_called()
+
+
+@pytest.mark.parametrize('error', [requests.ReadTimeout('upload timed out'),
+    RuntimeError('Telegram API error 401: Unauthorized'), RuntimeError('Telegram API error 400: Bad Request: chat not found')])
+def test_upload_transport_and_auth_errors_do_not_fall_back(setup_bot, error):
+    _, bot, store, audio, track = setup_bot
+    job = completed_job(audio, track)
+    store.put('download', job['id'], job)
+    bot.queue_file({'channel': 'tg', 'user': '123'}, job)
+    bot.telegram = Mock(side_effect=error)
+    item = store.values('bot_outbox')[-1]
+    with pytest.raises(type(error)):
+        bot.send(item)
+    assert bot.telegram.call_count == 1
+    assert item['file'] and not item['url']
+
+
+def test_size_rejection_link_notification_retry_does_not_upload_again(setup_bot):
+    _, bot, store, audio, track = setup_bot
+    job = completed_job(audio, track)
+    store.put('download', job['id'], job)
+    bot.queue_file({'channel': 'tg', 'user': '123'}, job)
+    bot.telegram = Mock(side_effect=[RuntimeError('Telegram API error 400: file is too big'), requests.ConnectionError('offline')])
+    async def scenario():
+        worker = asyncio.create_task(bot.file_deliveries())
+        try:
+            for _ in range(100):
+                await asyncio.sleep(.01)
+                if store.values('bot_outbox')[0]['attempts']:
+                    break
+            item = store.values('bot_outbox')[0]
+            assert item['attempts'] == 1 and not item['file'] and item['url']
+            assert 'file is too big' in item['text']
+        finally:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        bot.telegram.side_effect = None
+        bot.telegram.return_value = True
+        bot.send(item)
+        assert [call.args[0] for call in bot.telegram.call_args_list] == ['sendAudio', 'sendMessage', 'sendMessage']
+        bot.enqueue.assert_not_called()
+    asyncio.run(scenario())
+
+
+def test_size_rejection_without_public_url_reports_the_actual_error(setup_bot):
+    _, bot, store, audio, track = setup_bot
+    bot.links = None
     job = completed_job(audio, track)
     store.put('download', job['id'], job)
     bot.queue_file({'channel': 'tg', 'user': '123'}, job)
     bot.telegram = Mock(side_effect=[RuntimeError('Telegram API error 413: file too big'), True])
     bot.send(store.values('bot_outbox')[-1])
-    assert bot.telegram.call_args.args[0] == 'sendMessage'
-    assert bot.telegram.call_args.args[1]['reply_markup']['inline_keyboard'][0][0]['url'].startswith('https://music.example.com/downloads/')
+    text = bot.telegram.call_args.args[1]['text']
+    assert '413: file too big' in text and 'Web 下载原文件' in text
 
 
 def test_slow_file_upload_does_not_block_search_card_delivery(setup_bot):
