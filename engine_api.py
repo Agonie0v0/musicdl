@@ -29,6 +29,8 @@ from pydantic import BaseModel, Field
 import engine_worker
 import local_library
 
+BOT_SEARCH_IDLE_TIMEOUT = 90
+
 ALIASES = {'migu': 'MiguMusicClient', 'netease': 'NeteaseMusicClient', 'qq': 'QQMusicClient',
            'kuwo': 'KuwoMusicClient', 'qianqian': 'QianqianMusicClient'}
 LABELS = {'migu': '咪咕', 'netease': '网易云', 'qq': 'QQ音乐', 'kuwo': '酷我', 'qianqian': '千千',
@@ -1065,13 +1067,18 @@ def install(old, root):
             name = source_class(source)
             if name not in cfg['music_sources'] or name not in registered:
                 raise HTTPException(400, '机器人音源未启用或无效')
+            loop = asyncio.get_running_loop()
             def publish(song):
                 value = remember(song)
                 tracks[value['id']] = value
+                # Slow parsers must not cut off a source that is still returning songs.
+                if not deadline.expired():
+                    deadline.reschedule(loop.time() + BOT_SEARCH_IDLE_TIMEOUT)
             try:
-                songs = await asyncio.wait_for(source_results(cfg, name, keyword, publish), timeout=90)
-                for song in songs:
-                    publish(song)
+                async with asyncio.timeout(BOT_SEARCH_IDLE_TIMEOUT) as deadline:
+                    songs = await source_results(cfg, name, keyword, publish)
+                    for song in songs:
+                        publish(song)
             except asyncio.CancelledError:
                 raise
             except Exception as error:

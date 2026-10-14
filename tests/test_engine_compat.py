@@ -669,7 +669,8 @@ def native_quality_provider(name):
 
 
 @pytest.mark.parametrize('empty_primary', [False, True])
-def test_qq_empty_search_retries_signed_native_endpoint_without_losing_song(monkeypatch, empty_primary):
+@pytest.mark.parametrize('record_count', [1, 5])
+def test_qq_empty_search_retries_signed_native_endpoint_without_losing_song(empty_primary, record_count):
     from unittest.mock import Mock
     import requests
     from musicdl.modules.sources.qq import QQMusicClientUtils
@@ -683,23 +684,27 @@ def test_qq_empty_search_retries_signed_native_endpoint_without_losing_song(monk
     provider.disable_print = True
     song = quality_song('flac', 26012257, 'QQMusicClient')
     song.song_name, song.singers = '稻香', '周杰伦'
-    provider._parsewiththirdpartapis = Mock(return_value=song)
-    provider._parsewithofficialapiv1 = Mock(return_value=song)
+    parsed = [copy.deepcopy(song) for _ in range(record_count)]
+    for index, item in enumerate(parsed):
+        item.identifier = f'song-mid-{index}'
+    provider._parsewiththirdpartapis = Mock(side_effect=parsed)
+    provider._parsewithofficialapiv1 = Mock(side_effect=parsed)
     payload = {'music.search.SearchCgiService.DoSearchForQQMusicMobile': {'param': {'query': '稻香 周杰伦', 'page_num': 2, 'num_per_page': 5}}}
-    record = {'mid': 'song-mid', 'title': '稻香', 'singer': [{'name': '周杰伦'}]}
+    records = [{'mid': item.identifier, 'title': '稻香', 'singer': [{'name': '周杰伦'}]} for item in parsed]
     def response(records):
         value = requests.Response()
         value.status_code = 200
         value._content = json.dumps({'code': 0, 'music.search.SearchCgiService.DoSearchForQQMusicMobile':
                                     {'code': 0, 'data': {'body': {'item_song': records}}}}).encode()
         return value
-    provider.post = Mock(side_effect=[response([] if empty_primary else [record]), response([record])])
+    provider.post = Mock(side_effect=[response([] if empty_primary else records), response(records)])
     overrides = {'timeout': 17, 'proxies': {'https': 'http://proxy.example:7890'}, 'headers': {'X-Required': 'keep'},
                  'params': {'custom': 'keep'}}
     request = {'url': QQMusicClientUtils.endpoint, 'data': json.dumps(payload).encode(), 'page_no': 2}
     songs = []
     provider._search('稻香 周杰伦', request, overrides, songs, Mock())
-    assert songs == [song] and song.song_name == '稻香' and song.singers == '周杰伦'
+    assert songs == parsed and len(songs) == record_count
+    assert all(item.song_name == '稻香' and item.singers == '周杰伦' for item in songs)
     assert provider.post.call_count == (2 if empty_primary else 1)
     if empty_primary:
         assert provider.post.call_args.args[0] == QQMusicClientUtils.enc_endpoint
@@ -919,6 +924,49 @@ def test_resolved_tracks_survive_cancellation_of_slow_native_source(monkeypatch,
                     child.wait()
         assert terminated
         assert not list((_root / 'data' / 'engine').glob('*.search.partial'))
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('finish', [True, False])
+def test_bot_waits_for_progressing_source_and_stops_when_idle(monkeypatch, tmp_path, finish):
+    original_popen = engine_api.subprocess.Popen
+    monkeypatch.setattr(engine_api, 'BOT_SEARCH_IDLE_TIMEOUT', 1)
+    monkeypatch.setitem(app.original.manager.config, 'music_sources', ['QQMusicClient'])
+    songs = [quality_song('flac', 26012257, 'QQMusicClient') for _ in range(5)]
+    for index, song in enumerate(songs):
+        song.identifier = f'idle-test-{index}'
+        (tmp_path / str(index)).write_bytes(pickle.dumps(song))
+    (tmp_path / 'complete').write_bytes(pickle.dumps(songs))
+    script = '''
+import pickle, struct, sys, time
+from pathlib import Path
+args = pickle.loads(Path(sys.argv[1]).read_bytes())
+root = Path(sys.argv[3])
+with open(args[5], 'ab') as handle:
+    for index in range(5):
+        time.sleep(.35)
+        data = (root / str(index)).read_bytes()
+        handle.write(struct.pack('!Q', len(data)) + data)
+        handle.flush()
+if sys.argv[4] == 'True':
+    Path(sys.argv[2]).write_bytes((root / 'complete').read_bytes())
+else:
+    time.sleep(60)
+'''
+    children = []
+    def launch(args, **kwargs):
+        if '--search' not in args:
+            return original_popen(args, **kwargs)
+        child = original_popen([sys.executable, '-c', script, args[-2], args[-1], str(tmp_path), str(finish)], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(engine_api.subprocess, 'Popen', launch)
+    async def check():
+        tracks, partial = await asyncio.wait_for(app.app.state.bots.search('idle-test', ['qq']), 10)
+        assert len(tracks) == 5
+        assert all(track['size_bytes'] == 26012257 for track in tracks)
+        assert partial is not finish
+        assert all(child.poll() is not None for child in children)
     asyncio.run(check())
 
 
