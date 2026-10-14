@@ -1858,14 +1858,42 @@ tr.current {
 .settings-section input:not([type="checkbox"]),
 .settings-section select,
 .settings-section textarea,
-.form-label input {
+.form-label input,
+.login-input {
   display: block;
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--line);
   padding: 10px 12px;
-  border-radius: 6px;
+  border-radius: 8px;
   margin-top: 7px;
+}
+.settings-section input:not([type="checkbox"]),
+.settings-section select,
+.form-panel input,
+.form-panel select,
+.login-input {
+  min-width: 0;
+  height: 44px;
+  font-size: 14px;
+}
+.settings-section input::placeholder,
+.settings-section textarea::placeholder,
+.login-input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+.settings-section input:focus-visible,
+.settings-section select:focus-visible,
+.settings-section textarea:focus-visible,
+.login-input:focus-visible {
+  border-color: var(--accent);
+  outline-offset: 2px;
+}
+.settings-section input:disabled,
+.settings-section select:disabled,
+.login-input:disabled {
+  opacity: 0.65;
 }
 .settings-form {
   display: grid;
@@ -1928,25 +1956,26 @@ tr.current {
 }
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 240px));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 216px));
   gap: 20px;
 }
-.settings-section input[type="number"] {
-  width: 112px;
-  max-width: 100%;
+.settings-grid > * {
+  min-width: 0;
 }
-.settings-section input:not([type="checkbox"]):not([type="number"]),
+.settings-section input[type="number"],
+.settings-section select {
+  width: 100%;
+  max-width: 216px;
+}
+.settings-section input:not([type="checkbox"]):not([type="number"]) {
+  max-width: 360px;
+}
 .form-panel input,
 .form-label input {
   max-width: 480px;
 }
-.settings-section select {
-  width: auto;
-  min-width: min(100%, 180px);
-  max-width: 100%;
-}
 .bot-settings .settings-grid {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 380px));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 320px));
 }
 .source-disclosure {
   margin-top: 20px;
@@ -2046,6 +2075,118 @@ dialog::backdrop {
   justify-content: flex-end;
   gap: 12px;
   margin-top: 20px;
+}
+.login-dialog {
+  width: min(408px, calc(100% - 32px));
+  padding: 36px 32px 32px;
+  border-radius: 20px;
+  box-shadow:
+    0 24px 80px #17112229,
+    0 4px 16px #17112212;
+}
+.login-dialog::backdrop {
+  background: rgb(24 19 35 / 38%);
+  backdrop-filter: blur(4px);
+}
+.login-dialog .dialog-heading {
+  display: block;
+  margin-bottom: 28px;
+}
+.login-header {
+  text-align: center;
+}
+.login-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-bottom: 24px;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+.login-brand svg {
+  width: 30px;
+  height: 30px;
+  color: var(--accent);
+}
+.login-header h2 {
+  font-size: 25px;
+  line-height: 1.3;
+  letter-spacing: -0.025em;
+}
+.login-header p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.login-form {
+  display: grid;
+  gap: 20px;
+}
+.login-field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+}
+.login-password {
+  position: relative;
+  margin-top: 7px;
+}
+.login-password .login-input {
+  margin-top: 0;
+  padding-right: 48px;
+}
+.login-reveal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  inset: 1px 1px auto auto;
+  width: 44px;
+  height: 42px;
+  border-radius: 7px;
+  color: var(--muted);
+}
+.login-reveal:hover {
+  background: var(--hover);
+}
+.login-reveal:focus-visible {
+  outline-offset: -4px;
+}
+.login-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.login-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -4px 0;
+  color: var(--danger);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.login-error svg {
+  margin-top: 2px;
+  width: 17px;
+  height: 17px;
+}
+.login-submit {
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 4px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+:root[data-theme="dark"] .login-dialog {
+  box-shadow:
+    0 24px 80px #00000066,
+    0 4px 16px #00000033;
+}
+:root[data-theme="dark"] .login-dialog::backdrop {
+  background: rgb(9 6 16 / 56%);
 }
 .quality-list {
   max-height: 50dvh;
@@ -2555,6 +2696,14 @@ dialog::backdrop {
   .form-panel,
   .settings-section {
     padding: 20px 16px;
+  }
+  .login-dialog {
+    padding: 32px 24px 28px;
+  }
+  .settings-section input:not([type="checkbox"]),
+  .settings-section select,
+  .login-input {
+    font-size: 16px;
   }
   .download-row .secondary {
     padding: 7px;

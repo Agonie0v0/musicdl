@@ -929,7 +929,7 @@ try {
   const numberWidth = await page
     .getByLabel("每页大小", { exact: true })
     .evaluate((el) => el.getBoundingClientRect().width);
-  assert.ok(numberWidth <= 120, "numeric settings remain compact");
+  assert.ok(numberWidth <= 216, "numeric settings remain compact");
   for (const theme of ["light", "dark"]) {
     await page.getByLabel("界面主题").selectOption(theme);
     for (const width of [390, 1440]) {
@@ -1308,7 +1308,25 @@ try {
   await page.getByRole("button", { name: "运行日志", exact: true }).click();
   await page.getByLabel("日志类别", { exact: true }).selectOption("playback");
   await expect(page.locator(".log-lines")).toContainText("MediaError=4");
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "搜索音乐", exact: true }).click();
+  await page.getByLabel("界面主题").selectOption("system");
+  await page.emulateMedia({ colorScheme: "light" });
+  const loginAttempts = [];
+  let releaseLogin;
+  const loginGate = new Promise((resolve) => (releaseLogin = resolve));
+  await page.route("**/api/auth/login", async (route) => {
+    const credentials = route.request().postDataJSON();
+    loginAttempts.push(credentials);
+    if (credentials.password !== "correct-password") {
+      await route.fulfill({
+        status: 401,
+        json: { detail: "用户名或密码错误，请检查后重试" },
+      });
+    } else {
+      await loginGate;
+      await route.fulfill({ json: { authenticated: true } });
+    }
+  });
   await page.route("**/api/auth/status", (route) =>
     route.fulfill({ json: { required: true, authenticated: false } }),
   );
@@ -1318,10 +1336,110 @@ try {
   );
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await logoutRequest;
-  await expect(page.getByRole("dialog", { name: "登录音乐库" })).toBeVisible();
+  const loginDialog = page.getByRole("dialog", { name: "登录音乐库" });
+  const username = loginDialog.getByLabel("用户名", { exact: true });
+  const password = loginDialog.getByLabel("密码", { exact: true });
+  await expect(loginDialog).toBeVisible();
+  await expect(username).toBeFocused();
+  await username.press("Tab");
+  await expect(password).toBeFocused();
+  await password.press("Tab");
+  await expect(
+    loginDialog.getByRole("button", { name: "显示密码", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    loginDialog.getByRole("button", { name: "登录", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(loginDialog).toBeVisible();
+  await loginDialog.locator(".login-header").click();
+  for (const theme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme: theme });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({
+        width,
+        height: width === 1440 ? 1000 : 844,
+      });
+      const geometry = await loginDialog.evaluate((dialog) => {
+        const card = dialog.getBoundingClientRect();
+        const fields = [...dialog.querySelectorAll("input, .login-submit")].map(
+          (element) => element.getBoundingClientRect(),
+        );
+        return {
+          compact: card.width <= 408,
+          insideViewport:
+            card.left >= 0 &&
+            card.right <= innerWidth &&
+            card.bottom <= innerHeight,
+          aligned: fields.every(
+            (field) => Math.abs(field.width - fields[0].width) <= 1,
+          ),
+          noOverflow: dialog.scrollWidth <= dialog.clientWidth,
+        };
+      });
+      assert.deepEqual(geometry, {
+        compact: true,
+        insideViewport: true,
+        aligned: true,
+        noOverflow: true,
+      });
+      if (width !== 320)
+        await page.screenshot({
+          path: `../output/test-ui-login-${theme}-${width === 1440 ? "desktop" : "mobile"}.png`,
+        });
+      if (theme === "light" && width === 1440) {
+        const box = await loginDialog.boundingBox();
+        await page.screenshot({
+          path: "../output/test-ui-login-preview.png",
+          clip: {
+            x: box.x - 24,
+            y: box.y - 24,
+            width: box.width + 48,
+            height: box.height + 48,
+          },
+        });
+      }
+    }
+  }
+  await username.fill("listener");
+  await password.fill("wrong-password");
+  await loginDialog.getByRole("button", { name: "显示密码" }).click();
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(password).toHaveValue("wrong-password");
+  await loginDialog.getByRole("button", { name: "隐藏密码" }).click();
+  await expect(password).toHaveAttribute("type", "password");
+  await password.press("Enter");
+  await expect(loginDialog.getByRole("alert")).toHaveText(
+    "用户名或密码错误，请检查后重试",
+  );
+  await expect(password).toHaveAttribute("aria-invalid", "true");
+  await expect(password).toHaveAttribute("aria-describedby", "login-error");
+  await page.screenshot({ path: "../output/test-ui-login-error.png" });
+  await password.fill("correct-password");
+  await expect(loginDialog.getByRole("alert")).toHaveCount(0);
+  await password.press("Enter");
+  await expect(
+    loginDialog.getByRole("button", { name: "正在登录…", exact: true }),
+  ).toBeDisabled();
+  await expect(username).toBeDisabled();
+  await expect(password).toBeDisabled();
+  await loginDialog.locator("form").evaluate((form) => form.requestSubmit());
+  assert.deepEqual(loginAttempts, [
+    { username: "listener", password: "wrong-password" },
+    { username: "listener", password: "correct-password" },
+  ]);
+  releaseLogin();
+  await expect(loginDialog).toBeHidden();
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await expect(loginDialog).toBeVisible();
+  await expect(password).toHaveValue("");
+  await expect(password).toHaveAttribute("type", "password");
+  await expect(loginDialog.getByRole("alert")).toHaveCount(0);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser integration passed: search, real audio, lyric seeking, favorites, playlist, quality selection, queue controls, settings, responsive layout.",
+    "Browser integration passed: search, real audio, lyric seeking, favorites, playlist, quality selection, queue controls, settings, responsive layout, login states and authentication.",
   );
 } finally {
   await browser?.close();

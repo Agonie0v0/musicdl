@@ -36,6 +36,9 @@ import {
   Trash2,
   Bell,
   Github,
+  Eye,
+  EyeOff,
+  CircleAlert,
 } from "lucide-react";
 import { api } from "./api";
 import { selectResults } from "./results";
@@ -159,6 +162,9 @@ export function App() {
     [loginRequired, setLoginRequired] = useState(false),
     [loginUser, setLoginUser] = useState(""),
     [loginPass, setLoginPass] = useState(""),
+    [loginError, setLoginError] = useState(""),
+    [loginBusy, setLoginBusy] = useState(false),
+    [showLoginPassword, setShowLoginPassword] = useState(false),
     [busy, setBusy] = useState(false);
   const [qualityTracks, setQualityTracks] = useState<Track[] | null>(null),
     [qualities, setQualities] = useState<Record<string, string>>({}),
@@ -2421,11 +2427,28 @@ export function App() {
         </Modal>
       )}
       {loginRequired && (
-        <Modal title="登录音乐库">
+        <Modal
+          title="登录音乐库"
+          className="login-dialog"
+          heading={
+            <header className="login-header">
+              <div className="login-brand">
+                <AudioLines aria-hidden="true" />
+                <span>musicdl</span>
+              </div>
+              <h2>登录音乐库</h2>
+              <p>登录以继续搜索、播放和下载音乐</p>
+            </header>
+          }
+        >
           <form
+            className="login-form"
+            aria-busy={loginBusy}
             onSubmit={async (e) => {
               e.preventDefault();
-              setBusy(true);
+              if (loginBusy) return;
+              setLoginBusy(true);
+              setLoginError("");
               try {
                 await api("/auth/login", "POST", {
                   username: loginUser,
@@ -2433,38 +2456,87 @@ export function App() {
                 });
                 setLoginRequired(false);
                 setLoginPass("");
-                await load();
+                setShowLoginPassword(false);
+                await load().catch(fail);
               } catch (error) {
-                fail(error);
+                setLoginError(
+                  error instanceof Error ? error.message : String(error),
+                );
               } finally {
-                setBusy(false);
+                setLoginBusy(false);
               }
             }}
           >
-            <label className="form-label">
-              用户名
+            <div className="login-field">
+              <label htmlFor="login-username">用户名</label>
               <input
+                id="login-username"
+                className="login-input"
+                autoFocus
                 autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder="输入用户名"
                 value={loginUser}
-                onChange={(e) => setLoginUser(e.target.value)}
+                disabled={loginBusy}
+                aria-invalid={!!loginError}
+                aria-describedby={loginError ? "login-error" : undefined}
+                onChange={(e) => {
+                  setLoginUser(e.target.value);
+                  setLoginError("");
+                }}
                 required
               />
-            </label>
-            <label className="form-label">
-              密码
-              <input
-                autoComplete="current-password"
-                type="password"
-                value={loginPass}
-                onChange={(e) => setLoginPass(e.target.value)}
-                required
-              />
-            </label>
-            <div className="dialog-actions">
-              <button className="primary" disabled={busy}>
-                {busy ? "正在登录…" : "登录"}
-              </button>
             </div>
+            <div className="login-field">
+              <label htmlFor="login-password">密码</label>
+              <div className="login-password">
+                <input
+                  id="login-password"
+                  className="login-input"
+                  autoComplete="current-password"
+                  type={showLoginPassword ? "text" : "password"}
+                  placeholder="输入密码"
+                  value={loginPass}
+                  disabled={loginBusy}
+                  aria-invalid={!!loginError}
+                  aria-describedby={loginError ? "login-error" : undefined}
+                  onChange={(e) => {
+                    setLoginPass(e.target.value);
+                    setLoginError("");
+                  }}
+                  required
+                />
+                <button
+                  type="button"
+                  className="login-reveal"
+                  aria-label={showLoginPassword ? "隐藏密码" : "显示密码"}
+                  aria-pressed={showLoginPassword}
+                  aria-controls="login-password"
+                  disabled={loginBusy}
+                  onClick={() => setShowLoginPassword(!showLoginPassword)}
+                >
+                  {showLoginPassword ? (
+                    <EyeOff aria-hidden="true" />
+                  ) : (
+                    <Eye aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            </div>
+            {loginError && (
+              <p className="login-error" id="login-error" role="alert">
+                <CircleAlert aria-hidden="true" />
+                <span>{loginError}</span>
+              </p>
+            )}
+            <button
+              className="primary login-submit"
+              type="submit"
+              disabled={loginBusy}
+            >
+              {loginBusy ? "正在登录…" : "登录"}
+            </button>
           </form>
         </Modal>
       )}

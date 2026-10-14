@@ -125,10 +125,14 @@ export function Lyrics({
 export function Modal({
   title,
   close,
+  className,
+  heading,
   children,
 }: {
   title: string;
   close?: () => void;
+  className?: string;
+  heading?: ReactNode;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -139,6 +143,7 @@ export function Modal({
   return (
     <dialog
       ref={ref}
+      className={className}
       onCancel={(e) => {
         if (close) close();
         else e.preventDefault();
@@ -146,7 +151,7 @@ export function Modal({
       aria-label={title}
     >
       <div className="dialog-heading">
-        <h2>{title}</h2>
+        {heading || <h2>{title}</h2>}
         {close && (
           <Button label="关闭" onClick={close}>
             <X />
