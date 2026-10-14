@@ -543,9 +543,21 @@ def test_search_size_uses_original_metadata_without_network_requests():
     assert remember(song)['size_label'] is None
 
 
-def test_exact_song_info_persists_and_original_downloader_saves_audio():
+@pytest.mark.parametrize('layout,per_source', [('source', False), ('flat', False),
+                                            ('artist', False), ('artist_album', False), ('source', True)])
+def test_exact_song_info_persists_and_original_downloader_saves_audio(monkeypatch, layout, per_source):
     client = TestClient(app.app)
     song = fixture_song()
+    cfg = copy.deepcopy(app.original.manager.config)
+    base = _root / 'music' / f'download-{layout}-{per_source}'
+    cfg['global_client_cfg']['work_dir'] = str(base)
+    cfg['download_layout'] = layout
+    if per_source:
+        base = base / 'custom-provider'
+        cfg['init_music_clients_cfg'][song.source] = {'work_dir': str(base)}
+    monkeypatch.setattr(app.original.manager, 'config', cfg)
+    # Search results can point at an old directory or only the provider root.
+    song.work_dir = str(base)
     state = app.app.state.engine_test
     track = state['remember'](song)
     app.original.SONGS.pop(track['id'])
@@ -566,6 +578,10 @@ def test_exact_song_info_persists_and_original_downloader_saves_audio():
             break
         time.sleep(.2)
     assert job['status'] == 'complete', job
+    folders = {'source': [song.source], 'flat': [], 'artist': [song.singers],
+               'artist_album': [song.singers, song.album]}
+    audio_path = app.original.resolvefile(*json.loads(job['file']))
+    assert audio_path == base.joinpath(*folders[layout], 'Generated integration audio - Tests.wav')
     response = client.get('/api/files/content', params={'path': job['file']})
     assert response.status_code == 200
     with wave.open(io.BytesIO(response.content)) as audio:

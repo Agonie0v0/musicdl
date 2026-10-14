@@ -272,11 +272,11 @@ def test_tg_direct_files_need_no_public_url(setup_bot, monkeypatch):
 
 
 def test_download_filename_sanitizes_paths_and_byte_length():
-    assert download_stem('红尘客栈', '周杰伦') == '红尘客栈-周杰伦'
-    assert download_stem('../曲目:*?', '歌/手') == '_曲目___-歌_手'
-    assert download_stem('', '') == '未知歌曲-未知歌手'
-    assert download_stem('CON.song', '歌手') == '_CON.song-歌手'
-    assert len(download_stem('长' * 200, '名' * 200).encode('utf-8')) <= 201
+    assert download_stem('红尘客栈', '周杰伦') == '红尘客栈 - 周杰伦'
+    assert download_stem('../曲目:*?', '歌/手') == '_曲目___ - 歌_手'
+    assert download_stem('', '') == '未知歌曲 - 未知歌手'
+    assert download_stem('CON.song', '歌手') == '_CON.song - 歌手'
+    assert len(download_stem('长' * 200, '名' * 200).encode('utf-8')) <= 203
 
 
 @pytest.mark.parametrize('api_url', ['https://api.telegram.org', 'http://127.0.0.1:8081'])

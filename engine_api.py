@@ -816,7 +816,7 @@ def install(old, root):
                 if control['stop']:
                     return
                 original_song = copy.deepcopy(song)
-                old.applylayout(original_song)
+                old.applylayout(original_song, cfg)
                 # Isolate each job's partial files; publish only completed outputs.
                 if staging.is_symlink() or not staging.resolve().is_relative_to(old.FILE_ROOT.resolve()):
                     raise ValueError('临时下载目录不在音乐库中')

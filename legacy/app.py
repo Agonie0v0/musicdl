@@ -1098,13 +1098,16 @@ def _safeseg(name: str, fallback: str) -> str:
     return seg[:120] if seg else fallback
 
 
-def applylayout(song):
+def applylayout(song, cfg=None):
     '''set song.work_dir per the configured 下载分类方式 (download_layout)'''
-    layout = manager.config.get('download_layout', 'source')
+    cfg = manager.config if cfg is None else cfg
+    layout = cfg.get('download_layout', 'source')
+    base = cfg['global_client_cfg'].get('work_dir') or 'musicdl_outputs'
     if layout == 'source':
-        return  # keep musicdl's default "<work_dir>/<Source>/" folder
-    base = manager.config['global_client_cfg'].get('work_dir') or 'musicdl_outputs'
-    if layout == 'flat':
+        # Incremental/cached search results may still point at the provider root.
+        base = cfg.get('init_music_clients_cfg', {}).get(song.source, {}).get('work_dir') or base
+        segs = [_safeseg(song.source, '未知音源')]
+    elif layout == 'flat':
         segs = []
     elif layout == 'artist':
         segs = [_safeseg(song.singers, '未知歌手')]

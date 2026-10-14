@@ -20,7 +20,7 @@ def download_stem(title, artist):
         value = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', '_', str(value or '')).strip(' .')
         value = value.encode('utf-8')[:100].decode('utf-8', errors='ignore').rstrip(' .')
         return value or fallback
-    stem = clean(title, '未知歌曲') + '-' + clean(artist, '未知歌手')
+    stem = clean(title, '未知歌曲') + ' - ' + clean(artist, '未知歌手')
     if re.fullmatch(r'CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]', stem.split('.')[0], re.I):
         stem = '_' + stem
     return stem
