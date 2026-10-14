@@ -702,6 +702,48 @@ def endpoint(path, method):
                 if getattr(r, 'path', '') == path and method in getattr(r, 'methods', set()))
 
 
+@pytest.mark.parametrize('lazy', [None, '0', '1'])
+def test_search_displays_resolved_metadata_unless_lazy_is_enabled(monkeypatch, lazy):
+    from types import SimpleNamespace
+    if lazy is None:
+        monkeypatch.delenv('MUSICDL_LAZY_SEARCH', raising=False)
+    else:
+        monkeypatch.setenv('MUSICDL_LAZY_SEARCH', lazy)
+
+    async def search(cfg, source, keyword, publish, refresh):
+        assert cfg['_musicdl_candidates'] is (lazy == '1')
+        song = fixture_song()
+        song.source = source
+        if cfg['_musicdl_candidates']:
+            song.raw_data['_musicdl_candidate'] = True
+        return [song]
+
+    monkeypatch.setattr(app.app.state.engine_test['coordinator'], 'run', search)
+
+    async def check():
+        async def disconnected():
+            return False
+        job = await endpoint('/api/search/jobs', 'POST')(SearchBody(keyword='metadata', sources=['netease']))
+        try:
+            response = await endpoint('/api/search/jobs/{ident}/events', 'GET')(
+                job['id'], SimpleNamespace(headers={}, is_disconnected=disconnected))
+            async with asyncio.timeout(5):
+                events = [event async for event in response.body_iterator]
+            tracks = [json.loads(event.split('data: ', 1)[1]) for event in events if 'event: track\n' in event]
+            assert len(tracks) == 1
+            if lazy != '1':
+                assert tracks[0]['qualities'][0]['codec'] == 'wav'
+                assert tracks[0]['size_bytes'] == len(fixture_song().downloaded_contents)
+                assert tracks[0]['playback']['state'] == 'ready'
+            else:
+                assert tracks[0]['qualities'] == []
+                assert tracks[0]['playback']['state'] == 'pending'
+        finally:
+            await endpoint('/api/search/jobs/{ident}', 'DELETE')(job['id'])
+
+    asyncio.run(check())
+
+
 def test_cancel_before_start_does_not_exhaust_job_limit():
     async def check():
         start = endpoint('/api/search/jobs', 'POST')

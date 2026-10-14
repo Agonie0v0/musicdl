@@ -546,7 +546,7 @@ def install(old, root):
     async def search_start(body: SearchBody):
         keyword = body.keyword.strip()
         cfg = copy.deepcopy(old.manager.config)
-        cfg['_musicdl_candidates'] = os.environ.get('MUSICDL_LAZY_SEARCH', '1') != '0'
+        cfg['_musicdl_candidates'] = os.environ.get('MUSICDL_LAZY_SEARCH', '0') == '1'
         cfg['_musicdl_refresh'] = body.refresh
         sources = [source_class(s) for s in (body.sources or config()['sources'])]
         if not keyword or not sources or any(s not in cfg['music_sources'] or s not in registered for s in sources):
